@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { globbyStream } from 'globby';
 import { $ } from 'execa';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
 const CWD = process.cwd();
 
@@ -20,7 +20,7 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['ember-primitives'];
+const only = ['ember-api-docs', 'ember-data-api-docs'];
 
 const separator = `
 ---
@@ -28,6 +28,18 @@ const separator = `
 `;
 
 const sources = [
+  {
+    name: 'ember-api-docs',
+    git: 'https://github.com/ember-learn/ember-api-docs-data.git',
+    folder: 'json-docs/ember/5.12.0/',
+    pattern: '**/*.json',
+  },
+  {
+    name: 'ember-data-api-docs',
+    git: 'https://github.com/ember-learn/ember-api-docs-data.git',
+    folder: 'json-docs/ember/5.12.0/',
+    pattern: '**/*.json',
+  },
   {
     name: 'limber-tutorial',
     git: 'https://github.com/NullVoxPopuli/limber.git',
@@ -82,12 +94,10 @@ const sources = [
 ];
 
 async function getgit(source) {
-  await $({ shell: true, cwd: tmp })`git clone ${source.git}`;
+  await $({ shell: true, cwd: tmp })`git clone ${source.git} ${source.name}`;
 
-  let [url] = source.git.split('.git');
-  let [subPath] = url.split('/').reverse();
-
-  let sourceDir = path.join(tmp, subPath, source.folder);
+  let repoDir = path.join(tmp, source.name);
+  let sourceDir = path.join(repoDir, source.folder);
   let targetDir = path.join(output, source.name);
 
   await mkdir(targetDir, { recursive: true });
