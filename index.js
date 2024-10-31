@@ -8,7 +8,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
-import { globbyStream } from "globby";
+import { globbyStream } from 'globby';
 import { $ } from 'execa';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
@@ -20,10 +20,12 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
+const only = ['ember-resources'];
+
 const separator = `
 ---
 
-`
+`;
 
 const sources = [
   {
@@ -31,6 +33,12 @@ const sources = [
     git: 'https://github.com/NullVoxPopuli/limber.git',
     folder: 'apps/tutorial/public/docs/',
     pattern: '**/prose.md',
+  },
+  {
+    name: 'ember-resources',
+    git: 'https://github.com/NullVoxPopuli/ember-resources.git',
+    folder: 'docs/docs/',
+    pattern: '**/*.md',
   },
   {
     name: 'embroider',
@@ -45,6 +53,12 @@ const sources = [
     pattern: '**/*.md',
   },
   {
+    name: 'ember-data',
+    git: 'https://github.com/emberjs/data.git',
+    folder: 'guides',
+    pattern: '**/*.md',
+  },
+  {
     name: 'NullVoxPopuli',
     git: 'https://github.com/NullVoxPopuli/website.git',
     folder: 'content',
@@ -56,11 +70,10 @@ const sources = [
         'effects-in-ember',
         'template-only',
         'how-does-di-work',
-      ].some(x => filePath.includes(x));
-    }
-  }
+      ].some((x) => filePath.includes(x));
+    },
+  },
 ];
-
 
 async function getgit(source) {
   await $({ shell: true, cwd: tmp })`git clone ${source.git}`;
@@ -79,14 +92,13 @@ async function getgit(source) {
   for await (const filePath of globbyStream(source.pattern, {
     cwd: sourceDir,
   })) {
-    let fullSourcePath = path.join(sourceDir, filePath)
+    let fullSourcePath = path.join(sourceDir, filePath);
 
     if (source.filter) {
       if (!source.filter(fullSourcePath)) {
         continue;
       }
     }
-
 
     let buffer = await readFile(fullSourcePath);
     let content = buffer.toString();
@@ -98,9 +110,13 @@ async function getgit(source) {
   await writeFile(outputFile, fileContents);
 }
 
-
-await Promise.all(sources.map(source => {
-  if ('git' in source) {
-    return getgit(source);
-  }
-}))
+await Promise.all(
+  (only.length > 0
+    ? sources.filter((source) => only.includes(source.name))
+    : sources
+  ).map((source) => {
+    if ('git' in source) {
+      return getgit(source);
+    }
+  }),
+);

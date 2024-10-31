@@ -5,7 +5,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node ./index.js",
+    "format": "prettier --write ."
   },
   "keywords": [],
   "author": "",
@@ -16,6 +17,7 @@
   },
   "dependencies": {
     "execa": "^9.5.1",
-    "globby": "^14.0.2"
+    "globby": "^14.0.2",
+    "prettier": "^3.3.3"
   }
 }
