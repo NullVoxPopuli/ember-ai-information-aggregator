@@ -1,0 +1,21 @@
+{
+  "name": "ember-ai-information-aggregator",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0",
+  "packageManager": "pnpm@9.12.3",
+  "engines": {
+    "node": "^22"
+  },
+  "dependencies": {
+    "execa": "^9.5.1",
+    "globby": "^14.0.2"
+  }
+}
