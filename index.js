@@ -20,7 +20,7 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['ember-api-docs', 'ember-data-api-docs'];
+const only = ['reactiveweb'];
 
 const separator = `
 ---
@@ -28,6 +28,17 @@ const separator = `
 `;
 
 const sources = [
+  {
+    name: 'reactiveweb',
+    git: 'https://github.com/universal-ember/reactiveweb.git',
+    prepare: async ({ cwd }) => {
+      await $({ shell: true, cwd })`pnpm install`;
+      await $({ shell: true, cwd })`pnpm build`;
+      await $({ shell: true, cwd })`pnpm build:docs`;
+    },
+    folder: 'docs/dist',
+    pattern: '**/*.html',
+  },
   {
     name: 'ember-api-docs',
     git: 'https://github.com/ember-learn/ember-api-docs-data.git',
@@ -99,6 +110,10 @@ async function getgit(source) {
   let repoDir = path.join(tmp, source.name);
   let sourceDir = path.join(repoDir, source.folder);
   let targetDir = path.join(output, source.name);
+
+  if ('prepare' in source) {
+    await source.prepare({ cwd: repoDir });
+  }
 
   await mkdir(targetDir, { recursive: true });
 
