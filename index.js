@@ -20,7 +20,7 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['ember-resources'];
+const only = ['ember-primitives'];
 
 const separator = `
 ---
@@ -33,6 +33,12 @@ const sources = [
     git: 'https://github.com/NullVoxPopuli/limber.git',
     folder: 'apps/tutorial/public/docs/',
     pattern: '**/prose.md',
+  },
+  {
+    name: 'ember-primitives',
+    git: 'https://github.com/universal-ember/ember-primitives.git',
+    folder: 'docs-app/public/docs',
+    pattern: '**/*.md',
   },
   {
     name: 'ember-resources',
