@@ -20,14 +20,28 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['reactiveweb'];
+const only = ['glint'];
 
+const DEFAULT_PATTERN = '**/*';
 const separator = `
+
 ---
 
 `;
 
 const sources = [
+  {
+    name: 'glint',
+    git: 'https://github.com/typed-ember/glint.git',
+    folder: 'docs',
+    pattern: '**/*.md',
+  },
+  {
+    name: 'ember-rfcs',
+    git: 'https://github.com/emberjs/rfcs.git',
+    folder: 'text',
+    pattern: '*.md',
+  },
   {
     name: 'reactiveweb',
     git: 'https://github.com/universal-ember/reactiveweb.git',
@@ -36,8 +50,7 @@ const sources = [
       await $({ shell: true, cwd })`pnpm build`;
       await $({ shell: true, cwd })`pnpm build:docs`;
     },
-    folder: 'docs/dist',
-    pattern: '**/*.html',
+    folder: 'reactiveweb/src',
   },
   {
     name: 'ember-api-docs',
@@ -60,8 +73,7 @@ const sources = [
   {
     name: 'ember-primitives',
     git: 'https://github.com/universal-ember/ember-primitives.git',
-    folder: 'docs-app/public/docs',
-    pattern: '**/*.md',
+    folder: ['docs-app/public/docs', 'ember-primitives/src'],
   },
   {
     name: 'ember-resources',
@@ -108,34 +120,41 @@ async function getgit(source) {
   await $({ shell: true, cwd: tmp })`git clone ${source.git} ${source.name}`;
 
   let repoDir = path.join(tmp, source.name);
-  let sourceDir = path.join(repoDir, source.folder);
-  let targetDir = path.join(output, source.name);
-
-  if ('prepare' in source) {
-    await source.prepare({ cwd: repoDir });
-  }
-
-  await mkdir(targetDir, { recursive: true });
-
   let fileContents = ``;
+  let targetDir = path.join(output, source.name);
   let outputFile = path.join(targetDir, source.name);
 
-  for await (const filePath of globbyStream(source.pattern, {
-    cwd: sourceDir,
-  })) {
-    let fullSourcePath = path.join(sourceDir, filePath);
+  let folders = Array.isArray(source.folder) ? source.folder : [source.folder];
 
-    if (source.filter) {
-      if (!source.filter(fullSourcePath)) {
-        continue;
-      }
+  for (let sourceFolder of folders) {
+    let sourceDir = path.join(repoDir, sourceFolder);
+
+    if ('prepare' in source) {
+      await source.prepare({ cwd: repoDir });
     }
 
-    let buffer = await readFile(fullSourcePath);
-    let content = buffer.toString();
+    await mkdir(targetDir, { recursive: true });
 
-    fileContents += content;
-    fileContents += separator;
+    for await (const filePath of globbyStream(
+      source.pattern ?? DEFAULT_PATTERN,
+      {
+        cwd: sourceDir,
+      },
+    )) {
+      let fullSourcePath = path.join(sourceDir, filePath);
+
+      if (source.filter) {
+        if (!source.filter(fullSourcePath)) {
+          continue;
+        }
+      }
+
+      let buffer = await readFile(fullSourcePath);
+      let content = buffer.toString();
+
+      fileContents += content;
+      fileContents += separator;
+    }
   }
 
   await writeFile(outputFile, fileContents);
