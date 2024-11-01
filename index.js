@@ -20,7 +20,7 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['glint'];
+const only = ['glint', 'embroider'];
 
 const DEFAULT_PATTERN = '**/*';
 const separator = `
@@ -29,6 +29,10 @@ const separator = `
 
 `;
 
+/**
+ * This outputs a document per top-level array.
+ * Because we are limited to 20 documents, we need to do some combining
+ */
 const sources = [
   {
     name: 'glint',
@@ -83,9 +87,26 @@ const sources = [
   },
   {
     name: 'embroider',
-    git: 'https://github.com/embroider-build/embroider.git',
-    folder: 'docs',
-    pattern: '**/*.md',
+    group: [
+      {
+        name: 'embroider',
+        git: 'https://github.com/embroider-build/embroider.git',
+        folder: 'docs',
+        pattern: '**/*.md',
+      },
+      {
+        name: 'addon-blueprint',
+        git: 'https://github.com/embroider-build/addon-blueprint.git',
+        folder: '.',
+        pattern: 'README.md',
+      },
+      {
+        name: 'app-blueprint',
+        git: 'https://github.com/embroider-build/app-blueprint.git',
+        folder: '.',
+        pattern: 'README.md',
+      },
+    ],
   },
   {
     name: 'guides-source',
@@ -117,12 +138,17 @@ const sources = [
 ];
 
 async function getgit(source) {
+  let fileContents = await contentsForGit(source);
+  let outputFile = path.join(output, source.name);
+
+  await writeFile(outputFile, fileContents);
+}
+
+async function contentsForGit(source) {
   await $({ shell: true, cwd: tmp })`git clone ${source.git} ${source.name}`;
 
   let repoDir = path.join(tmp, source.name);
   let fileContents = ``;
-  let targetDir = path.join(output, source.name);
-  let outputFile = path.join(targetDir, source.name);
 
   let folders = Array.isArray(source.folder) ? source.folder : [source.folder];
 
@@ -132,8 +158,6 @@ async function getgit(source) {
     if ('prepare' in source) {
       await source.prepare({ cwd: repoDir });
     }
-
-    await mkdir(targetDir, { recursive: true });
 
     for await (const filePath of globbyStream(
       source.pattern ?? DEFAULT_PATTERN,
@@ -157,6 +181,22 @@ async function getgit(source) {
     }
   }
 
+  return fileContents;
+}
+
+async function getGroup({ name, group }) {
+  let fileContents = '';
+  let outputFile = path.join(output, name);
+
+  for (let item of group) {
+    fileContents += `------------------------\n`;
+    fileContents += `# ${name}\n`;
+    fileContents += `------------------------\n`;
+
+    fileContents += await contentsForGit(item);
+    fileContents += separator;
+  }
+
   await writeFile(outputFile, fileContents);
 }
 
@@ -167,6 +207,8 @@ await Promise.all(
   ).map((source) => {
     if ('git' in source) {
       return getgit(source);
+    } else if ('group' in source) {
+      return getGroup(source);
     }
   }),
 );
