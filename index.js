@@ -8,6 +8,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
+import { inspect } from 'node:util';
 import { globbyStream } from 'globby';
 import { $ } from 'execa';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -20,7 +21,7 @@ const tmp = path.join(os.tmpdir(), `ember-ai-${Date.now()}`);
 await mkdir(tmp, { recursive: true });
 await mkdir(output, { recursive: true });
 
-const only = ['glint', 'embroider'];
+const only = [];
 
 const DEFAULT_PATTERN = '**/*';
 const separator = `
@@ -145,6 +146,8 @@ async function getgit(source) {
 }
 
 async function contentsForGit(source) {
+  console.log(`Fetching: ${source.git}`);
+
   await $({ shell: true, cwd: tmp })`git clone ${source.git} ${source.name}`;
 
   let repoDir = path.join(tmp, source.name);
@@ -188,6 +191,8 @@ async function getGroup({ name, group }) {
   let fileContents = '';
   let outputFile = path.join(output, name);
 
+  console.log(`Working on group: ${name}`);
+
   for (let item of group) {
     fileContents += `------------------------\n`;
     fileContents += `# ${name}\n`;
@@ -200,7 +205,7 @@ async function getGroup({ name, group }) {
   await writeFile(outputFile, fileContents);
 }
 
-await Promise.all(
+let results = await Promise.allSettled(
   (only.length > 0
     ? sources.filter((source) => only.includes(source.name))
     : sources
@@ -212,3 +217,5 @@ await Promise.all(
     }
   }),
 );
+
+console.log(inspect(results, false, null));
