@@ -58,16 +58,21 @@ const sources = [
     folder: 'reactiveweb/src',
   },
   {
-    name: 'ember-api-docs',
-    git: 'https://github.com/ember-learn/ember-api-docs-data.git',
-    folder: 'json-docs/ember/5.12.0/',
-    pattern: '**/*.json',
-  },
-  {
-    name: 'ember-data-api-docs',
-    git: 'https://github.com/ember-learn/ember-api-docs-data.git',
-    folder: 'json-docs/ember/5.12.0/',
-    pattern: '**/*.json',
+    name: 'api-docs',
+    group: [
+      {
+        name: 'ember-api-docs',
+        git: 'https://github.com/ember-learn/ember-api-docs-data.git',
+        folder: 'json-docs/ember/6.2.0/',
+        pattern: '**/*.json',
+      },
+      {
+        name: 'ember-data-api-docs',
+        git: 'https://github.com/ember-learn/ember-api-docs-data.git',
+        folder: 'json-docs/ember/6.2.0/',
+        pattern: '**/*.json',
+      },
+    ],
   },
   {
     name: 'limber-tutorial',
@@ -89,6 +94,12 @@ const sources = [
   {
     name: 'embroider',
     group: [
+      {
+        name: 'vite-codemod',
+        git: 'https://github.com/mainmatter/ember-vite-codemod.git',
+        folder: '.',
+        pattern: 'README.md',
+      },
       {
         name: 'embroider',
         git: 'https://github.com/embroider-build/embroider.git',
@@ -122,19 +133,32 @@ const sources = [
     pattern: '**/*.md',
   },
   {
-    name: 'NullVoxPopuli',
-    git: 'https://github.com/NullVoxPopuli/website.git',
-    folder: 'content',
-    pattern: '**/*.md',
-    filter: (filePath) => {
-      return [
-        'setting-up-gjs',
-        'avoiding-lifecycle',
-        'effects-in-ember',
-        'template-only',
-        'how-does-di-work',
-      ].some((x) => filePath.includes(x));
-    },
+    name: 'community-bloggers',
+    group: [
+      {
+        name: 'NullVoxPopuli',
+        git: 'https://github.com/NullVoxPopuli/website.git',
+        folder: 'content',
+        pattern: '**/*.md',
+        filter: (filePath) => {
+          return [
+            'setting-up-gjs',
+            'avoiding-lifecycle',
+            'effects-in-ember',
+            'template-only',
+            'how-does-di-work',
+            'where-do-i',
+            'design-systems',
+          ].some((x) => filePath.includes(x));
+        },
+      },
+      {
+        name: 'runspired',
+        git: 'https://github.com/runspired/runspired.com.git',
+        folder: '_posts',
+        pattern: '**/*.md',
+      },
+    ],
   },
 ];
 
