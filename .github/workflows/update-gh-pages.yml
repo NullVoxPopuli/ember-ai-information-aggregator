@@ -31,5 +31,5 @@ jobs:
           git remote add origin https://git:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git
           git add .
           git commit -am"'deploy'"
-          git push -f
+          git push --set-upstream origin gh-pages --force
 
