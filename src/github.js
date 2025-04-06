@@ -2,7 +2,7 @@ import path from 'node:path';
 import { globbyStream } from 'globby';
 import { $ } from 'execa';
 import { readFile, writeFile } from 'node:fs/promises';
-import { tmp, output } from './file.js';
+import { tmp, output, separator } from './file.js';
 
 const only = [];
 
