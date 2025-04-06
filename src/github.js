@@ -18,12 +18,14 @@ const sources = [
     git: 'https://github.com/typed-ember/glint.git',
     folder: 'docs',
     pattern: '**/*.md',
+    ext: 'md',
   },
   {
     name: 'ember-rfcs',
     git: 'https://github.com/emberjs/rfcs.git',
     folder: 'text',
     pattern: '*.md',
+    ext: 'md',
   },
   {
     name: 'reactiveweb',
@@ -57,6 +59,7 @@ const sources = [
     git: 'https://github.com/NullVoxPopuli/limber.git',
     folder: 'apps/tutorial/public/docs/',
     pattern: '**/prose.md',
+    ext: 'md',
   },
   {
     name: 'ember-primitives',
@@ -68,9 +71,11 @@ const sources = [
     git: 'https://github.com/NullVoxPopuli/ember-resources.git',
     folder: 'docs/docs/',
     pattern: '**/*.md',
+    ext: 'md',
   },
   {
     name: 'embroider',
+    ext: 'md',
     group: [
       {
         name: 'vite-codemod',
@@ -100,18 +105,21 @@ const sources = [
   },
   {
     name: 'guides-source',
+    ext: 'md',
     git: 'https://github.com/ember-learn/guides-source.git',
     folder: 'guides/release',
     pattern: '**/*.md',
   },
   {
     name: 'ember-data',
+    ext: 'md',
     git: 'https://github.com/emberjs/data.git',
     folder: 'guides',
     pattern: '**/*.md',
   },
   {
     name: 'community-bloggers',
+    ext: 'md',
     group: [
       {
         name: 'NullVoxPopuli',
@@ -142,7 +150,8 @@ const sources = [
 
 async function getgit(source) {
   let fileContents = await contentsForGit(source);
-  let outputFile = path.join(output, source.name);
+  let fileName = source.name + (ext ? `.${ext}` : '');
+  let outputFile = path.join(output, fileName);
 
   await writeFile(outputFile, fileContents);
 }
@@ -189,14 +198,15 @@ async function contentsForGit(source) {
   return fileContents;
 }
 
-async function getGroup({ name, group }) {
+async function getGroup({ name, group, ext }) {
   let fileContents = '';
-  let outputFile = path.join(output, name);
+  let fileName = name + (ext ? `.${ext}` : '');
+  let outputFile = path.join(output, fileName);
 
   console.log(`Working on group: ${name}`);
 
   for (let item of group) {
-    fileContents += `------------------------\n`;
+    fileContents += `\n\n------------------------\n`;
     fileContents += `# ${name}\n`;
     fileContents += `------------------------\n`;
 
