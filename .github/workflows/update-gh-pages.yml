@@ -20,4 +20,4 @@ jobs:
         env: 
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEV_TO_KEY: ${{ secrets.DEV_TO_KEY }}
-      - run: gh-pages -d dist
+      - run: pnpm gh-pages -d dist
