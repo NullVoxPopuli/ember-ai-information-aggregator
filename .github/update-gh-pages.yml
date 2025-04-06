@@ -1,0 +1,24 @@
+name: Update GH pages
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: update-data-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+
+jobs:
+  update-data:
+    name: "Update Data"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: wyvox/action@v1
+      - run: node ./index.js
+      - uses: kategengler/put-built-npm-package-contents-on-branch@v2.1.0
+        with:
+          branch: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: dist 
