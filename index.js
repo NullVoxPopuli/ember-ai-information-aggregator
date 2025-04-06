@@ -122,7 +122,7 @@ const sources = [
   },
   {
     name: 'guides-source',
-    git: 'git@github.com:ember-learn/guides-source.git',
+    git: 'https://github.com/ember-learn/guides-source.git',
     folder: 'guides/release',
     pattern: '**/*.md',
   },
