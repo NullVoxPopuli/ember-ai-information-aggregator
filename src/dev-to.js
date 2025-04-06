@@ -67,6 +67,10 @@ export default async function getAll() {
   let text = '';
 
   for (let article of keep) {
+    // There may be a rate limit...
+    // Two articles per second isn't bad tho
+    // (We may be able to retrieve faster, but this seems kind)
+    await new Promise(500);
     let data = await get(`/articles/${article.path}/`);
 
     text += '\n';
