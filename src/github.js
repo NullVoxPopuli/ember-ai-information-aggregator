@@ -150,7 +150,7 @@ const sources = [
 
 async function getgit(source) {
   let fileContents = await contentsForGit(source);
-  let fileName = source.name + (ext ? `.${ext}` : '');
+  let fileName = source.name + (source.ext ? `.${source.ext}` : '');
   let outputFile = path.join(output, fileName);
 
   await writeFile(outputFile, fileContents);
