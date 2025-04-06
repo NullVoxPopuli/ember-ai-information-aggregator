@@ -1,0 +1,2716 @@
+import { cell, resource } from 'ember-resources';
+
+/**
+ * A utility for debouncing high-frequency updates.
+ * The returned value will only be updated every `ms` and is
+ * initially undefined, unless an initialize value is provided.
+ *
+ * This can be useful when a user's typing is updating a tracked
+ * property and you want to derive data less frequently than on
+ * each keystroke.
+ *
+ * Note that this utility requires the `@use` decorator
+ * (debounce could be implemented without the need for the `@use` decorator
+ * but the current implementation is 8 lines)
+ *
+ * @example
+ * ```js
+ *  import Component from '@glimmer/component';
+ *  import { tracked } from '@glimmer/tracking';
+ *  import { use } from 'ember-resources';
+ *  import { debounce } from 'reactiveweb/debounce';
+ *
+ *  const delay = 100; // ms
+ *
+ *  class Demo extends Component {
+ *    @tracked userInput = '';
+ *
+ *    @use debouncedInput = debounce(delay, () => this.userInput);
+ *  }
+ * ```
+ *
+ * @example
+ * This could be further composed with RemoteData
+ * ```js
+ *  import Component from '@glimmer/component';
+ *  import { tracked } from '@glimmer/tracking';
+ *  import { use } from 'ember-resources';
+ *  import { debounce } from 'reactiveweb/debounce';
+ *  import { RemoteData } from 'reactiveweb/remote-data';
+ *
+ *  const delay = 100; // ms
+ *
+ *  class Demo extends Component {
+ *    @tracked userInput = '';
+ *
+ *    @use debouncedInput = debounce(delay, () => this.userInput);
+ *
+ *    @use search = RemoteData(() => `https://my.domain/search?q=${this.debouncedInput}`);
+ *  }
+ * ```
+ *
+ * @example
+ * An initialize value can be provided as the starting value instead of it initially returning undefined.
+ * ```js
+ *  import Component from '@glimmer/component';
+ *  import { tracked } from '@glimmer/tracking';
+ *  import { use } from 'ember-resources';
+ *  import { debounce } from 'reactiveweb/debounce';
+ *
+ *  const delay = 100; // ms
+ *
+ *  class Demo extends Component {
+ *    @tracked userInput = 'products';
+ *
+ *    @use debouncedInput = debounce(delay, () => this.userInput, this.userInput);
+ *  }
+ * ```
+ *
+ * @param {number} ms delay in milliseconds to wait before updating the returned value
+ * @param {() => Value} thunk function that returns the value to debounce
+ * @param {Value} initialize value to return initially before any debounced updates
+ */
+export function debounce<Value = unknown>(ms: number, thunk: () => Value, initialize?: Value) {
+  let lastValue: Value | undefined = initialize;
+  let state = cell<Value | undefined>(lastValue);
+
+  return resource(({ on }) => {
+    let timer: number;
+
+    lastValue = thunk();
+
+    on.cleanup(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    });
+
+    timer = setTimeout(() => {
+      state.current = lastValue;
+    }, ms);
+
+    return () => state.current;
+  });
+}
+
+
+---
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable ember/no-get */
+import { assert } from '@ember/debug';
+import { associateDestroyableChild, registerDestructor } from '@ember/destroyable';
+import { get } from '@ember/object';
+
+import { resource } from 'ember-resources';
+
+import { DEFAULT_THUNK, normalizeThunk } from './utils.ts';
+
+/**
+ * uses Resource to make ember-concurrency tasks reactive.
+ *
+ * -------------------------
+ *
+ * @note `ember-resources` does not provide or depend on ember-concurrency.
+ * If you want to use task, you'll need to add ember-concurrency as a dependency
+ * in your project.
+ *
+ * @example
+ *  When `this.id` changes, the task will automatically be re-invoked.
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { restartableTask, timeout } from 'ember-concurrency';
+ * import { task as trackedTask } from 'reactiveweb/ember-concurrency';
+ *
+ * class Demo {
+ *   @tracked id = 1;
+ *
+ *   searchTask = restartableTask(async () => {
+ *     await timeout(200);
+ *     await fetch('...');
+ *     return 'the-value';
+ *   })
+ *
+ *   last = trackedTask(this, this.searchTask, () => [this.id]);
+ * }
+ * ```
+ * ```hbs
+ * Available Properties:
+ *  {{this.last.value}}
+ *  {{this.last.isFinished}}
+ *  {{this.last.isRunning}}
+ * ```
+ *  (and all other properties on a [TaskInstance](https://ember-concurrency.com/api/TaskInstance.html))
+ *
+ *
+ */
+export function task<
+  Return = unknown,
+  Args extends unknown[] = unknown[],
+  LocalTask extends TaskIsh<Args, Return> = TaskIsh<Args, Return>,
+>(context: object, task: LocalTask, thunk?: () => Args) {
+  assert(`Task does not have a perform method. Is it actually a task?`, 'perform' in task);
+
+  const state = new State<Args, Return, LocalTask>(task);
+
+  let destroyable = resource(context, () => {
+    let args = thunk || DEFAULT_THUNK;
+
+    let positional = normalizeThunk(args).positional as Args;
+
+    state[RUN](positional || []);
+
+    return state;
+  });
+
+  associateDestroyableChild(destroyable, state);
+
+  registerDestructor(state, () => state[TASK].cancelAll());
+
+  return destroyable as unknown as TaskInstance<Return>;
+}
+
+export const trackedTask = task;
+
+export type TaskReturnType<T> = T extends TaskIsh<any, infer Return> ? Return : unknown;
+export type TaskArgsType<T> = T extends TaskIsh<infer Args, any> ? Args : unknown[];
+
+export interface TaskIsh<Args extends any[], Return> {
+  perform: (...args: Args) => TaskInstance<Return>;
+  cancelAll: () => void;
+}
+
+/**
+ * @private
+ *
+ * Need to define this ourselves, because between
+ * ember-concurrency 1, 2, -ts, decorators, etc
+ * there are 5+ ways the task type is defined
+ *
+ * https://github.com/machty/ember-concurrency/blob/f53656876748973cf6638f14aab8a5c0776f5bba/addon/index.d.ts#L280
+ */
+export interface TaskInstance<Return = unknown> extends Promise<Return> {
+  readonly value: Return | null;
+  readonly error: unknown;
+  readonly isSuccessful: boolean;
+  readonly isError: boolean;
+  readonly isCanceled: boolean;
+  readonly hasStarted: boolean;
+  readonly isFinished: boolean;
+  readonly isRunning: boolean;
+  readonly isDropped: boolean;
+  cancel(reason?: string): void | Promise<void>;
+}
+
+/**
+ * @private
+ */
+export const TASK = Symbol('TASK');
+
+const RUN = Symbol('RUN');
+
+/**
+ * @private
+ */
+export class State<Args extends any[], Return, LocalTask extends TaskIsh<Args, Return>> {
+  // Set via useTask
+  declare [TASK]: LocalTask;
+
+  constructor(task: LocalTask) {
+    this[TASK] = task;
+
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+
+    /*
+     * This proxy defaults to returning the underlying data on
+     * the task runner when '.value' is accessed.
+     *
+     * When working with ember-concurrency tasks, users have the expectation
+     * that they'll be able to inspect the status of the tasks, such as
+     * `isRunning`, `isFinished`, etc.
+     *
+     * To support that, we need to proxy to the `currentTask`.
+     *
+     */
+    return new Proxy(self, {
+      get(target, key): unknown {
+        if (key === RUN) {
+          return self[RUN];
+        }
+
+        const taskRunner = self;
+        const instance = taskRunner.currentTask;
+
+        if (!instance) {
+          return;
+        }
+
+        if (typeof key === 'string') {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          get(taskRunner.currentTask, key);
+        }
+
+        if (key === 'value') {
+          /**
+           * getter that falls back to the previous task's value
+           */
+          return taskRunner.value;
+        }
+
+        // We can be thennable, but we'll want to entangle with tracked data
+        if (key === 'then') {
+          get(taskRunner.currentTask, 'isRunning');
+        }
+
+        /**
+         * If the key is anything other than value, query on the currentTask
+         */
+        const value = Reflect.get(instance as object, key, instance);
+
+        return typeof value === 'function' ? value.bind(instance) : value;
+      },
+      // ownKeys(target): (string | symbol)[] {
+      //   return Reflect.ownKeys(target.value);
+      // },
+      // getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+      //   return Reflect.getOwnPropertyDescriptor(target.value, key);
+      // },
+    });
+  }
+  // Set during setup/update
+  declare currentTask: TaskInstance<Return>;
+  declare lastTask: TaskInstance<Return> | undefined;
+
+  get value(): Return | null | undefined {
+    if (this.currentTask?.isFinished && !this.currentTask.isCanceled) {
+      return this.currentTask.value;
+    }
+
+    return this.lastTask?.value;
+  }
+
+  [RUN] = (positional: Args) => {
+    if (this.currentTask) {
+      this.lastTask = this.currentTask;
+    }
+
+    this.currentTask = this[TASK].perform(...positional);
+  };
+}
+
+
+---
+
+import { cell, resource, resourceFactory } from 'ember-resources';
+
+/**
+ * Utility that uses requestAnimationFrame to report
+ * how many frames per second the current monitor is
+ * rendering at.
+ *
+ * The result is rounded to two decimal places.
+ *
+ * ```js
+ * import { FrameRate } from 'reactiveweb/fps';
+ *
+ * <template>
+ *   {{FrameRate}}
+ * </template>
+ * ```
+ */
+export const FrameRate = resource(({ on }) => {
+  let value = cell(0);
+  let startTime = new Date().getTime();
+  let frame: number;
+
+  let update = () => {
+    // simulate receiving data as fast as possible
+    frame = requestAnimationFrame(() => {
+      value.current++;
+      update();
+    });
+  };
+
+  on.cleanup(() => cancelAnimationFrame(frame));
+
+  // Start the infinite requestAnimationFrame chain
+  update();
+
+  return () => {
+    let elapsed = (new Date().getTime() - startTime) * 0.001;
+    let fps = value.current * Math.pow(elapsed, -1);
+    let rounded = Math.round(fps * 100) * 0.01;
+    // account for https://stackoverflow.com/a/588014/356849
+    let formatted = `${rounded}`.substring(0, 5);
+
+    return formatted;
+  };
+});
+
+/**
+ * Utility that will report the frequency of updates to tracked data.
+ *
+ * ```js
+ * import { UpdateFrequency } from 'reactiveweb/fps';
+ *
+ * export default class Demo extends Component {
+ *   @tracked someProp;
+ *
+ *   @use updateFrequency = UpdateFrequency(() => this.someProp);
+ *
+ *   <template>
+ *     {{this.updateFrequency}}
+ *   </template>
+ * }
+ * ```
+ *
+ * NOTE: the function passed to UpdateFrequency may not set tracked data.
+ */
+export const UpdateFrequency = resourceFactory((ofWhat: () => unknown, updateInterval = 500) => {
+  updateInterval ||= 500;
+
+  let multiplier = 1000 / updateInterval;
+  let framesSinceUpdate = 0;
+
+  return resource(({ on }) => {
+    let value = cell(0);
+    let interval = setInterval(() => {
+      value.current = framesSinceUpdate * multiplier;
+      framesSinceUpdate = 0;
+    }, updateInterval);
+
+    on.cleanup(() => clearInterval(interval));
+
+    return () => {
+      ofWhat();
+      framesSinceUpdate++;
+
+      return value.current;
+    };
+  });
+});
+
+
+---
+
+import { tracked } from '@glimmer/tracking';
+import { assert } from '@ember/debug';
+import { associateDestroyableChild, destroy, isDestroyed, isDestroying } from '@ember/destroyable';
+
+import { TrackedAsyncData } from 'ember-async-data';
+import { resource } from 'ember-resources';
+
+interface CallbackMeta {
+  isRetrying: boolean;
+}
+
+/**
+ * Any tracked data accessed in a tracked function _before_ an `await`
+ * will "entangle" with the function -- we can call these accessed tracked
+ * properties, the "tracked prelude". If any properties within the tracked
+ * payload  change, the function will re-run.
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { tracked } from '@glimmer/tracking';
+ * import { resourceFactory, resource, use } from 'ember-resources';
+ * import { trackedFunction }  from 'reactiveweb/function';
+ * import { on } from '@ember/modifier';
+ *
+ * function Request(idFn) {
+ *   return resource(({use}) => {
+ *     let trackedRequest = use(trackedFunction(async () => {
+ *       let id = idFn();
+ *       let response = await fetch(`https://swapi.dev/api/people/${id}`);
+ *       let data = await response.json();
+ *
+ *       return data; // { name: 'Luke Skywalker', ... }
+ *     }));
+ *
+ *     return trackedRequest;
+ *   });
+ * }
+ *
+ * class Demo extends Component {
+ *   @tracked id = 1;
+ *
+ *   updateId = (event) => this.id = event.target.value;
+ *
+ *   request = use(this, Request(() => this.id));
+ *
+ *   // Renders "Luke Skywalker"
+ *   <template>
+ *     {{this.request.current.value.name}}
+ *
+ *     <input value={{this.id}} {{on 'input' this.updateId}}>
+ *   </template>
+ * }
+ * ```
+ */
+export function trackedFunction<Return>(
+  fn: (meta: {
+    /**
+     * true when state.retry() is called, false initially
+     * and also false when tracked data changes (new initial)
+     */
+    isRetrying: boolean;
+  }) => Return
+): State<Return>;
+
+/**
+ * Any tracked data accessed in a tracked function _before_ an `await`
+ * will "entangle" with the function -- we can call these accessed tracked
+ * properties, the "tracked prelude". If any properties within the tracked
+ * payload  change, the function will re-run.
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { tracked } from '@glimmer/tracking';
+ * import { trackedFunction }  from 'reactiveweb/function';
+ *
+ * class Demo extends Component {
+ *   @tracked id = 1;
+ *
+ *   request = trackedFunction(this, async () => {
+ *     let response = await fetch(`https://swapi.dev/api/people/${this.id}`);
+ *     let data = await response.json();
+ *
+ *     return data; // { name: 'Luke Skywalker', ... }
+ *   });
+ *
+ *   updateId = (event) => this.id = event.target.value;
+ *
+ *   // Renders "Luke Skywalker"
+ *   <template>
+ *     {{this.request.value.name}}
+ *
+ *     <input value={{this.id}} {{on 'input' this.updateId}}>
+ *   </template>
+ * }
+ * ```
+ * _Note_, this example uses the proposed `<template>` syntax from the [First-Class Component Templates RFC][rfc-799]
+ *
+ * Also note that after an `await`, the `this` context should not be accessed as it could lead to
+ * destruction/timing issues.
+ *
+ * [rfc-799]: https://github.com/emberjs/rfcs/pull/779
+ *
+ * @param {Object} context destroyable parent, e.g.: component instance aka "this"
+ * @param {Function} fn the function to run with the return value available on .value
+ */
+export function trackedFunction<Return>(
+  context: object,
+  fn: (meta: {
+    /**
+     * true when state.retry() is called, false initially
+     * and also false when tracked data changes (new initial)
+     */
+    isRetrying: boolean;
+  }) => Return
+): State<Return>;
+
+export function trackedFunction<Return>(
+  ...args: Parameters<typeof directTrackedFunction<Return>> | Parameters<typeof classUsable<Return>>
+): State<Return> {
+  if (args.length === 1) {
+    return classUsable(...args);
+  }
+
+  if (args.length === 2) {
+    return directTrackedFunction(...args);
+  }
+
+  assert('Unknown arity: trackedFunction must be called with 1 or 2 arguments');
+}
+
+const START = Symbol.for('__reactiveweb_trackedFunction__START__');
+
+function classUsable<Return>(fn: (meta: CallbackMeta) => Return) {
+  const state = new State(fn);
+
+  let destroyable = resource<State<Return>>(() => {
+    state[START]();
+
+    return state;
+  });
+
+  associateDestroyableChild(destroyable, state);
+
+  return destroyable;
+}
+
+function directTrackedFunction<Return>(context: object, fn: (meta: CallbackMeta) => Return) {
+  const state = new State(fn);
+
+  let destroyable = resource<State<Return>>(context, () => {
+    state[START]();
+
+    return state;
+  });
+
+  associateDestroyableChild(destroyable, state);
+
+  return destroyable;
+}
+
+/**
+ * State container that represents the asynchrony of a `trackedFunction`
+ */
+export class State<Value> {
+  @tracked data: TrackedAsyncData<Value> | null = null;
+  @tracked declare promise: Value;
+
+  /**
+   * ember-async-data doesn't catch errors,
+   * so we can't rely on it to protect us from "leaky errors"
+   * during rendering.
+   *
+   * See also: https://github.com/qunitjs/qunit/issues/1736
+   */
+  @tracked caughtError: unknown;
+
+  #fn: (meta: CallbackMeta) => Value;
+
+  constructor(fn: (meta: CallbackMeta) => Value) {
+    this.#fn = fn;
+  }
+
+  get state(): TrackedAsyncData<Value>['state'] | 'UNSTARTED' {
+    return this.data?.state ?? 'UNSTARTED';
+  }
+
+  /**
+   * Initially true, and remains true
+   * until the underlying promise resolves or rejects.
+   */
+  get isPending() {
+    if (!this.data) return true;
+
+    return this.data.isPending ?? false;
+  }
+
+  /**
+   * Alias for `isResolved || isRejected`
+   */
+  get isFinished() {
+    return this.isResolved || this.isRejected;
+  }
+
+  /**
+   * Alias for `isFinished`
+   * which is in turn an alias for `isResolved || isRejected`
+   */
+  get isSettled() {
+    return this.isFinished;
+  }
+
+  /**
+   * Alias for `isPending`
+   */
+  get isLoading() {
+    return this.isPending;
+  }
+
+  /**
+   * When true, the function passed to `trackedFunction` has resolved
+   */
+  get isResolved() {
+    return this.data?.isResolved ?? false;
+  }
+
+  /**
+   * Alias for `isRejected`
+   */
+  get isError() {
+    return this.isRejected;
+  }
+
+  /**
+   * When true, the function passed to `trackedFunction` has errored
+   */
+  get isRejected() {
+    return this.data?.isRejected ?? Boolean(this.caughtError) ?? false;
+  }
+
+  /**
+   * this.data may not exist yet.
+   *
+   * Additionally, prior iterations of TrackedAsyncData did
+   * not allow the accessing of data before
+   * .state === 'RESOLVED'  (isResolved).
+   *
+   * From a correctness standpoint, this is perfectly reasonable,
+   * as it forces folks to handle the states involved with async functions.
+   *
+   * The original version of `trackedFunction` did not use TrackedAsyncData,
+   * and did not have these strictnesses upon property access, leaving folks
+   * to be as correct or as fast/prototype-y as they wished.
+   *
+   * For now, `trackedFunction` will retain that flexibility.
+   */
+  get value(): Awaited<Value> | null {
+    if (this.data?.isResolved) {
+      // This is sort of a lie, but it ends up working out due to
+      // how promises chain automatically when awaited
+      return this.data.value as Awaited<Value>;
+    }
+
+    return null;
+  }
+
+  /**
+   * When the function passed to `trackedFunction` throws an error,
+   * that error will be the value returned by this property
+   */
+  get error() {
+    if (this.state === 'UNSTARTED' && this.caughtError) {
+      return this.caughtError;
+    }
+
+    if (this.data?.state !== 'REJECTED') {
+      return null;
+    }
+
+    if (this.caughtError) {
+      return this.caughtError;
+    }
+
+    return this.data?.error ?? null;
+  }
+
+  async [START]() {
+    try {
+      await this._dangerousRetry({ isRetrying: false });
+    } catch (e) {
+      if (isDestroyed(this) || isDestroying(this)) return;
+      this.caughtError = e;
+    }
+  }
+
+  /**
+   * Will re-invoke the function passed to `trackedFunction`
+   * this will also re-set some properties on the `State` instance.
+   * This is the same `State` instance as before, as the `State` instance
+   * is tied to the `fn` passed to `trackedFunction`
+   *
+   * `error` or `resolvedValue` will remain as they were previously
+   * until this promise resolves, and then they'll be updated to the new values.
+   */
+  retry = async () => {
+    try {
+      /**
+       * This function has two places where it can error:
+       * - immediately when inovking `fn` (where auto-tracking occurs)
+       * - after an await, "eventually"
+       */
+      await this._dangerousRetry({ isRetrying: true });
+    } catch (e) {
+      if (isDestroyed(this) || isDestroying(this)) return;
+      this.caughtError = e;
+    }
+  };
+
+  _dangerousRetry = async ({ isRetrying }: CallbackMeta) => {
+    if (isDestroyed(this) || isDestroying(this)) return;
+
+    // We've previously had data, but we're about to run-again.
+    // we need to do this again so `isLoading` goes back to `true` when re-running.
+    // NOTE: we want to do this _even_ if this.data is already null.
+    //       it's all in the same tracking frame and the important thing is taht
+    //       we can't *read* data here.
+    this.data = null;
+
+    // this._internalError = null;
+
+    // We need to invoke this before going async so that tracked properties are consumed (entangled with) synchronously
+    this.promise = this.#fn({ isRetrying });
+
+    // TrackedAsyncData interacts with tracked data during instantiation.
+    // We don't want this internal state to entangle with `trackedFunction`
+    // so that *only* the tracked data in `fn` can be entangled.
+    await Promise.resolve();
+
+    /**
+     * Before we await to start a new request, let's clear our error.
+     * This is detached from the tracking frame (via the above await),
+     * se the UI can update accordingly, without causing us to refetch
+     */
+    this.caughtError = null;
+
+    if (this.data) {
+      let isUnsafe = isDestroyed(this.data) || isDestroying(this.data);
+
+      if (!isUnsafe) {
+        destroy(this.data);
+        this.data = null;
+      }
+    }
+
+    if (isDestroyed(this) || isDestroying(this)) return;
+
+    // TrackedAsyncData manages the destroyable child association for us
+    this.data = new TrackedAsyncData(this.promise);
+
+    return this.promise;
+  };
+}
+
+
+---
+
+import { getValue } from '@glimmer/tracking/primitives/cache';
+import { invokeHelper } from '@ember/helper';
+
+import { DEFAULT_THUNK, normalizeThunk } from './utils.ts';
+
+import type ClassBasedHelper from '@ember/component/helper';
+import type { FunctionBasedHelper } from '@ember/component/helper';
+import type { HelperLike } from '@glint/template';
+import type { Thunk } from 'ember-resources';
+
+// Should be from
+// @glimmer/tracking/primitives/cache
+type Cache = ReturnType<typeof invokeHelper>;
+
+type Get<T, K, Otherwise = unknown> = K extends keyof T ? T[K] : Otherwise;
+
+/**
+ * implemented with raw `invokeHelper` API, no classes from `ember-resources` used.
+ *
+ * -----------------------
+ *
+ * Enables the use of template-helpers in JavaScript
+ *
+ * Note that it should be preferred to use regular functions in javascript
+ * whenever possible, as the runtime cost of "things as resources" is non-0.
+ * For example, if using `@ember/component/helper` utilities, it's a common p
+ * practice to split the actual behavior from the framework construct
+ * ```js
+ * export function plainJs() {}
+ *
+ * export default helper(() => plainJs())
+ * ```
+ * so in this case `plainJs` can be used separately.
+ *
+ * This differentiation makes less of a difference since
+ * [plain functions as helpers](https://github.com/emberjs/rfcs/pull/756)
+ * will be supported soon.
+ *
+ * @example
+ * ```js
+ * import intersect from 'ember-composable-helpers/addon/helpers/intersect';
+ *
+ * import { helper } from 'reactiveweb/helper';
+ *
+ * class Demo {
+ *   @tracked listA = [...];
+ *   @tracked listB = [...]
+ *
+ *   intersection = helper(this, intersect, () => [this.listA, this.listB])
+ *
+ *   toString = (array) => array.join(', ');
+ * }
+ * ```
+ * ```hbs
+ * {{this.toString this.intersection.value}}
+ * ```
+ */
+export function helper<T = unknown, S = InferSignature<T>, Return = Get<S, 'Return'>>(
+  context: object,
+  helper: T,
+  thunk: Thunk = DEFAULT_THUNK
+): { value: Return } {
+  let resource: Cache;
+
+  return {
+    get value(): Return {
+      if (!resource) {
+        resource = invokeHelper(context, helper as object, () => {
+          return normalizeThunk(thunk);
+        });
+      }
+
+      // SAFETY: we want whatever the Return type is to be forwarded.
+      //         getValue could technically be undefined, but we *def*
+      //         have an invokedHelper, so we can safely defer to the helper.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return getValue<Return>(resource as any) as Return;
+    },
+  };
+}
+
+type InferSignature<T> =
+  T extends HelperLike<infer S>
+    ? S
+    : T extends FunctionBasedHelper<infer S>
+      ? S
+      : T extends ClassBasedHelper<infer S>
+        ? S
+        : 'Signature not found';
+
+
+---
+
+import { resource, resourceFactory } from 'ember-resources';
+
+import { trackedFunction } from './function.ts';
+
+/**
+ * Reactively load an Image with access to loading / error state.
+ *
+ * Usage in a component
+ * ```js
+ * import { ReactiveImage } from 'reactiveweb/image';
+ * <template>
+ *   {{#let (ReactiveImage 'https://path.to.image') as |state|}}
+ *      {{#if imgState.isResolved}}
+ *        <img src={{imgState.value}}>
+ *      {{/if}}
+ *   {{/let}}
+ * </template>
+ * ```
+ *
+ * Usage in a class
+ * ```js
+ * import { use } from 'ember-resources';
+ * import { ReactiveImage } from 'reactiveweb/image';
+ *
+ * class Demo {
+ *   @use imageState = ReactiveImage('https://path.to.image');
+ * }
+ * ```
+ *
+ * Reactive usage in a class
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { use } from 'ember-resources';
+ * import { ReactiveImage } from 'reactiveweb/image';
+ *
+ * class Demo {
+ *   @tracked url = '...';
+ *   @use imageState = ReactiveImage(() => this.url);
+ * }
+ * ```
+ */
+export const ReactiveImage = resourceFactory((maybeUrl: string | (() => string)) => {
+  return resource(({ use }) => {
+    const readonlyReactive = use(
+      trackedFunction(async () => {
+        /**
+         * NOTE: Image#onerror is a global error.
+         *       So in testing, the error escapes the confines
+         *       of this promise handler (trackedFunction)
+         *
+         * We need to "swallow the rejection" and re-throw
+         * by wrapping in an extra promise.
+         */
+        const image = new window.Image();
+        const url = typeof maybeUrl === 'function' ? maybeUrl() : maybeUrl;
+
+        function loadImage() {
+          /**
+           * Note tha lack of reject callback.
+           * This is what allows us to capture "global errors"
+           * thrown by image.onerror
+           *
+           * Additionally, the global error does not have a stack trace.
+           * And we want to provide a stack trace for easier debugging.
+           *
+           */
+          return new Promise((resolve) => {
+            image.onload = resolve;
+
+            /**
+             * The error passed to onerror doesn't look that useful.
+             *  But we'll log it just in case.
+             *
+             */
+            image.onerror = (error) => {
+              console.error(`Image failed to load at ${url}`, error);
+
+              /**
+               * If we use real reject, we cause an un-catchable error
+               */
+              resolve('soft-rejected');
+            };
+
+            image.src = url;
+          });
+        }
+
+        return await loadImage();
+      })
+    );
+
+    /**
+     * Here we both forward the state of trackedFunction
+     * as well as re-define how we want to determine what isError, value, and isResolved
+     * mean.
+     *
+     * This is because trackedFunction does not capture errors.
+     * I believe it _should_ though, so this may be a bug.
+     *
+     * If it ends up being a bug in trackedFunction,
+     * then we can delete all this, and only do:
+     *
+     * return () => readonlyReactive.current;
+     */
+    const isError = () => readonlyReactive.current.value === 'soft-rejected';
+
+    return {
+      get isError() {
+        return isError();
+      },
+      get value() {
+        if (isError()) return null;
+
+        return readonlyReactive.current.value;
+      },
+      get isResolved() {
+        if (isError()) return false;
+
+        return readonlyReactive.current.isResolved;
+      },
+      get isLoading() {
+        return readonlyReactive.current.isLoading;
+      },
+    };
+  });
+});
+
+
+---
+
+import { resource, resourceFactory } from 'ember-resources';
+
+const isEmpty = (x: undefined | unknown | unknown[]) => {
+  if (Array.isArray(x)) {
+    return x.length === 0;
+  }
+
+  if (typeof x === 'object') {
+    if (x === null) return true;
+
+    return Object.keys(x).length === 0;
+  }
+
+  return x !== 0 && !x;
+};
+
+interface Options<T = unknown> {
+  /**
+   * A function who's return value, when true, will
+   * keep the latest truthy value as the "return value"
+   * (as determined by the `value` option's return value)
+   */
+  when: () => boolean;
+
+  /**
+   * A function who's return value will be used as the value
+   * of this resource.
+   */
+  value: () => T;
+}
+
+/**
+ * A utility decorator for smoothing out changes in upstream data between
+ * refreshes / reload.
+ *
+ * @example
+ * when using RemoteData (or some other promise-based "eventually a value" resource),
+ * the value returned from the API is what's useful to see to users. But if the URL
+ * changes, the remote request will start anew, and isLoading becomes true, and the value is falsey until the request finishes. This can result in some flicker
+ * until the new request finishes.
+ *
+ * To smooth that out, we can use [[keepLatest]]
+ *
+ * ```js
+ *  import { RemoteData } from 'reactiveweb/remote-data';
+ *  import { keepLatest } from 'reactiveweb/keep-latest';
+ *  import { use } from 'ember-resources';
+ *
+ *  class A {
+ *    @use request = RemoteData(() => 'some url');
+ *    @use data = keepLatest({
+ *      value: () => this.request.value,
+ *      when: () => this.request.isLoading,
+ *    });
+ *
+ *    get result() {
+ *      // after the initial request, this is always resolved
+ *      return this.data;
+ *    }
+ *  }
+ * ```
+ *
+ * To specify a default value, use an additional getter
+ * ```js
+ *  import { RemoteData } from 'reactiveweb/remote-data';
+ *  import { keepLatest } from 'reactiveweb/keep-latest';
+ *  import { use } from 'ember-resources';
+ *
+ *  class A {
+ *    @use request = RemoteData(() => 'some url');
+ *    @use data = keepLatest({
+ *      value: () => this.request.value,
+ *      when: () => this.request.isLoading,
+ *    });
+ *
+ *    get latest() {
+ *      // after the initial request, this is always resolved
+ *      return this.data;
+ *    }
+ *
+ *    get result() {
+ *      return this.latest ?? { default: 'value' };
+ *    }
+ *  }
+ * ```
+ */
+export function keepLatest<Return = unknown>({ when, value: valueFn }: Options<Return>) {
+  return resource(() => {
+    let previous: Return;
+    let initial = true;
+
+    return () => {
+      let value = valueFn();
+
+      if (when()) {
+        /**
+         * Initially, if we may as well return the value instead
+         * of the "previous" value is there is no previous yet.
+         *
+         * We check against undefined, because that's what
+         * `previous` is "initialized" to.
+         *
+         * And then we never enter this block again, because
+         * we will have previous values in future invocations of this
+         * Formula.
+         */
+        if (previous === undefined && initial) {
+          initial = false;
+
+          return value;
+        }
+
+        return (previous = isEmpty(value) ? previous : value);
+      }
+
+      return (previous = value);
+    };
+  });
+}
+
+resourceFactory(keepLatest);
+
+
+---
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { getOwner, setOwner } from '@ember/application';
+import { assert } from '@ember/debug';
+import { associateDestroyableChild } from '@ember/destroyable';
+
+import type { Class, Stage1Decorator, Stage1DecoratorDescriptor } from '#types';
+
+type NonKey<K> = K extends string ? never : K extends symbol ? never : K;
+
+/**
+ * A util to abstract away the boilerplate of linking of "things" with an owner
+ * and making them destroyable.
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { link } from 'reactiveweb/link';
+ *
+ * class MyClass {  ... }
+ *
+ * export default class Demo extends Component {
+ *   @link(MyClass) myInstance;
+ * }
+ * ```
+ */
+export function link<Instance>(child: Class<Instance>): Stage1Decorator;
+
+/**
+ * A util to abstract away the boilerplate of linking of "things" with an owner
+ * and making them destroyable.
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { cached } from '@glimmer/tracking';
+ * import { link } from 'reactiveweb/link';
+ *
+ * export default class Demo extends Component {
+ *   @cached
+ *   get myFunction() {
+ *     let instance = new MyClass(this.args.foo);
+ *
+ *     return link(instance, this);
+ *   }
+ * }
+ * ```
+ *
+ * NOTE: If args change, as in this example, memory pressure will increase,
+ *       as the linked instance will be held on to until the host object is destroyed.
+ */
+export function link<Child, Other>(child: Child, parent: NonKey<Other>): Child;
+
+/**
+ * A util to abstract away the boilerplate of linking of "things" with an owner
+ * and making them destroyable.
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { link } from 'reactiveweb/link';
+ *
+ * class MyClass {  ... }
+ *
+ * export default class Demo extends Component {
+ *   @link myInstance = new MyClass();
+ * }
+ * ```
+ *
+ * NOTE: reactive args may not be passed to `MyClass` directly if you wish updates to be observed.
+ *   A way to use reactive args is this:
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { tracked } from '@glimmer/tracking';
+ * import { link } from 'reactiveweb/link';
+ *
+ * class MyClass {  ... }
+ *
+ * export default class Demo extends Component {
+ *   @tracked foo = 'bar';
+ *
+ *   @link myInstance = new MyClass({
+ *      foo: () => this.args.foo,
+ *      bar: () => this.bar,
+ *   });
+ * }
+ * ```
+ *
+ * This way, whenever foo() or bar() is invoked within `MyClass`,
+ * only the thing that does that invocation will become entangled with the tracked data
+ * referenced within those functions.
+ */
+export function link(...args: Parameters<Stage1Decorator>): void;
+
+export function link(...args: any[]) {
+  if (args.length === 3) {
+    /**
+     * Uses initializer to get the child
+     */
+    return linkDecorator(...(args as Parameters<Stage1Decorator>));
+  }
+
+  if (args.length === 1) {
+    return linkDecoratorFactory(...(args as unknown as [any]));
+  }
+
+  // Because TS types assume property decorators might not have a descriptor,
+  // we have to cast....
+  return directLink(...(args as unknown as [object, object]));
+}
+
+function directLink(child: object, parent: object) {
+  associateDestroyableChild(parent, child);
+
+  let owner = getOwner(parent);
+
+  if (owner) {
+    setOwner(child, owner);
+  }
+
+  return child;
+}
+
+function linkDecoratorFactory(child: Class<unknown>) {
+  return function decoratorPrep(...args: Parameters<Stage1Decorator>) {
+    return linkDecorator(...args, child);
+  };
+}
+
+function linkDecorator(
+  _prototype: object,
+  key: string | symbol,
+  descriptor: Stage1DecoratorDescriptor | undefined,
+  explicitChild?: Class<unknown>
+): void {
+  assert(`@link is a stage 1 decorator, and requires a descriptor`, descriptor);
+  assert(`@link can only be used with string-keys`, typeof key === 'string');
+
+  let { initializer } = descriptor;
+
+  assert(
+    `@link requires an initializer or be used as a decorator factory (\`@link(...))\`). For example, ` +
+      `\`@link foo = new MyClass();\` or \`@link(MyClass) foo;\``,
+    initializer || explicitChild
+  );
+
+  let caches = new WeakMap<object, any>();
+
+  return {
+    get(this: object) {
+      let child = caches.get(this);
+
+      if (!child) {
+        if (initializer) {
+          child = initializer.call(this);
+        }
+
+        if (explicitChild) {
+          // How do you narrow this to a constructor?
+          child = new explicitChild();
+        }
+
+        assert(`Failed to create child instance.`, child);
+
+        associateDestroyableChild(this, child);
+
+        let owner = getOwner(this);
+
+        assert(`Owner was not present on parent. Is instance of ${this.constructor.name}`, owner);
+
+        setOwner(child, owner);
+
+        caches.set(this, child);
+        assert(`Failed to create cache for internal resource configuration object`, child);
+      }
+
+      return child;
+    },
+  } as unknown as void /* Thanks TS. */;
+}
+
+
+---
+
+import { cached } from '@glimmer/tracking';
+import { setOwner } from '@ember/application';
+import { assert } from '@ember/debug';
+
+/**
+ * Public API of the return value of the [[map]] utility.
+ */
+export interface MappedArray<Elements extends readonly unknown[], MappedTo> {
+  /**
+   * Array-index access to specific mapped data.
+   *
+   * If the map function hasn't ran yet on the source data, it will be ran, an cached
+   * for subsequent accesses.
+   *
+   * ```js
+   *  class Foo {
+   *    myMappedData = map(this, {
+   *      data: () => [1, 2, 3],
+   *      map: (num) => `hi, ${num}!`
+   *    });
+   *
+   *    get first() {
+   *      return this.myMappedData[0];
+   *    }
+   *  }
+   * ```
+   */
+  [index: number]: MappedTo;
+
+  /**
+   * evaluate and return an array of all mapped items.
+   *
+   * This is useful when you need to do other Array-like operations
+   * on the mapped data, such as filter, or find
+   *
+   * ```js
+   *  class Foo {
+   *    myMappedData = map(this, {
+   *      data: () => [1, 2, 3],
+   *      map: (num) => `hi, ${num}!`
+   *    });
+   *
+   *    get everything() {
+   *      return this.myMappedData.values();
+   *    }
+   *  }
+   * ```
+   */
+  values: () => { [K in keyof Elements]: MappedTo };
+
+  /**
+   * Without evaluating the map function on each element,
+   * provide the total number of elements
+   *
+   * ```js
+   *  class Foo {
+   *    myMappedData = map(this, {
+   *      data: () => [1, 2, 3],
+   *      map: (num) => `hi, ${num}!`
+   *    });
+   *
+   *    get numItems() {
+   *      return this.myMappedData.length;
+   *    }
+   *  }
+   * ```
+   */
+  length: number;
+  // ^ in TS 4.3+, this can change to get length(): number;
+  //   as a funny side-effect of changing this back to just a simple property,
+  //   type-declaration-maps work again
+
+  /**
+   * Iterate over the mapped array, lazily invoking the passed map function
+   * that was passed to [[map]].
+   *
+   * This will always return previously mapped records without re-evaluating
+   * the map function, so the default `{{#each}}` behavior in ember will
+   * be optimized on "object-identity". e.g.:
+   *
+   * ```js
+   *  // ...
+   *  myMappedData = map(this, {
+   *    data: () => [1, 2, 3],
+   *    map: (num) => `hi, ${num}!`
+   *  });
+   *  // ...
+   * ```
+   * ```hbs
+   *  {{#each this.myMappedData as |datum|}}
+   *     loop body only invoked for changed entries
+   *     {{datum}}
+   *  {{/each}}
+   * ```
+   *
+   * Iteration in javascript is also provided by this iterator
+   * ```js
+   *  class Foo {
+   *    myMappedData = map(this, {
+   *      data: () => [1, 2, 3],
+   *      map: (num) => `hi, ${num}!`
+   *    });
+   *
+   *    get mapAgain() {
+   *      let results = [];
+   *
+   *      for (let datum of this.myMappedData) {
+   *        results.push(datum);
+   *      }
+   *
+   *      return datum;
+   *    }
+   *  }
+   * ```
+   */
+  [Symbol.iterator](): Iterator<MappedTo>;
+}
+
+/**
+ * Reactivily apply a `map` function to each element in an array,
+ * persisting map-results for each object, based on identity.
+ *
+ * This is useful when you have a large collection of items that
+ * need to be transformed into a different shape (adding/removing/modifying data/properties)
+ * and you want the transform to be efficient when iterating over that data.
+ *
+ * A common use case where this `map` utility provides benefits over is
+ * ```js
+ * class MyClass {\
+ *   @cached
+ *   get wrappedRecords() {
+ *     return this.records.map(record => new SomeWrapper(record));
+ *   }
+ * }
+ * ```
+ *
+ * Even though the above is `@cached`, if any tracked data accessed during the evaluation of `wrappedRecords`
+ * changes, the entire array.map will re-run, often doing duplicate work for every unchanged item in the array.
+ *
+ * @return {MappedArray} an object that behaves like an array. This shouldn't be modified directly. Instead, you can freely modify the data returned by the `data` function, which should be tracked in order to benefit from this abstraction.
+ *
+ * @example
+ *
+ * ```js
+ *  import { map } from 'reactiveweb/map';
+ *
+ *  class MyClass {
+ *    wrappedRecords = map(this, {
+ *      data: () => this.records,
+ *      map: (record) => new SomeWrapper(record),
+ *    }),
+ *  }
+ * ```
+ */
+export function map<Elements extends readonly unknown[], MapTo = unknown>(
+  /**
+   * parent destroyable context, usually `this`
+   */
+  destroyable: object,
+  options: {
+    /**
+     * Array of non-primitives to map over
+     *
+     * This can be class instances, plain objects, or anything supported by WeakMap's key
+     */
+    data: () => Elements;
+    /**
+     * How to transform each element from `data`,
+     * similar to if you were to use Array map yourself.
+     *
+     * This function will be called only when needed / on-demand / lazily.
+     * - if iterating over part of the data, map will only be called for the elements observed
+     * - if not iterating, map will only be called for the elements observed.
+     */
+    map: (element: Elements[0]) => MapTo;
+  }
+): MappedArray<Elements, MapTo> {
+  let { data, map } = options;
+
+  return new TrackedArrayMap(destroyable, data, map) as MappedArray<Elements, MapTo>;
+}
+
+const AT = '__AT__';
+
+/**
+ * @private
+ */
+export class TrackedArrayMap<Element = unknown, MappedTo = unknown>
+  implements MappedArray<Element[], MappedTo>
+{
+  // Tells TS that we can array-index-access
+  [index: number]: MappedTo;
+
+  // these can't be real private fields
+  // until @cached is a real decorator
+  private _mapCache = new WeakMap<Element & object, MappedTo>();
+  private _dataFn: () => readonly Element[];
+  private _mapper: (element: Element) => MappedTo;
+
+  constructor(owner: object, data: () => readonly Element[], map: (element: Element) => MappedTo) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setOwner(this, owner as any);
+
+    this._dataFn = data;
+    this._mapper = map;
+
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+
+    /**
+     * This is what allows square-bracket index-access to work.
+     *
+     * Unfortunately this means the returned value is
+     * Proxy -> Proxy -> wrapper object -> *then* the class instance
+     *
+     * Maybe JS has a way to implement array-index access, but I don't know how
+     */
+    return new Proxy(this, {
+      get(_target, property) {
+        if (typeof property === 'string') {
+          let parsed = parseInt(property, 10);
+
+          if (!isNaN(parsed)) {
+            return self[AT](parsed);
+          }
+        }
+
+        return self[property as keyof MappedArray<Element[], MappedTo>];
+      },
+      // Is there a way to do this without lying to TypeScript?
+    }) as TrackedArrayMap<Element, MappedTo>;
+  }
+
+  @cached
+  get _records(): (Element & object)[] {
+    let data = this._dataFn();
+
+    assert(
+      `Every entry in the data passed to \`map\` must be an object.`,
+      data.every((datum) => typeof datum === 'object')
+    );
+
+    return data as Array<Element & object>;
+  }
+
+  values = () => [...this];
+
+  get length() {
+    return this._records.length;
+  }
+
+  [Symbol.iterator](): Iterator<MappedTo> {
+    let i = 0;
+
+    return {
+      next: () => {
+        if (i >= this.length) {
+          return { done: true, value: null };
+        }
+
+        let value = this[AT](i);
+
+        i++;
+
+        return {
+          value,
+          done: false,
+        };
+      },
+    };
+  }
+
+  /**
+   * @private
+   *
+   * don't conflict with
+   *   https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at
+   */
+  [AT] = (i: number) => {
+    let record = this._records[i];
+
+    assert(
+      `Expected record to exist at index ${i}, but it did not. ` +
+        `The array item is expected to exist, because the map utility resource lazily iterates along the indices of the original array passed as data. ` +
+        `This error could happen if the data array passed to map has been mutated while iterating. ` +
+        `To resolve this error, do not mutate arrays while iteration occurs.`,
+      record
+    );
+
+    let value = this._mapCache.get(record);
+
+    if (!value) {
+      value = this._mapper(record);
+      this._mapCache.set(record, value);
+    }
+
+    return value;
+  };
+}
+
+
+---
+
+import { tracked } from '@glimmer/tracking';
+import { waitForPromise } from '@ember/test-waiters';
+
+import { resource, resourceFactory } from 'ember-resources';
+
+import type { ResourceAPI } from 'ember-resources';
+
+type FetchOptions = Parameters<typeof fetch>[1];
+
+/**
+ * @protected
+ */
+export class State<T = unknown> {
+  /**
+   * If an exception was thrown while making the request, the error
+   * thrown will be here.
+   */
+  @tracked error: Error | null = null;
+  /**
+   * The resolved value of the fetch request
+   */
+  @tracked value: T | null = null;
+
+  /**
+   * HTTP status code.
+   */
+  @tracked status: null | number = null;
+
+  /**
+   * True if the request has succeeded
+   */
+  @tracked isResolved = false;
+
+  /**
+   * True if the request has failed
+   */
+  @tracked isRejected = false;
+
+  /**
+   * true if the request has finished
+   */
+  get isFinished() {
+    return this.isResolved || this.isRejected;
+  }
+
+  /**
+   * Alias for `isFinished`
+   * which is in turn an alias for `isResolved || isRejected`
+   */
+  get isSettled() {
+    return this.isFinished;
+  }
+
+  /**
+   * Alias for isLoading
+   */
+  get isPending() {
+    return this.isLoading;
+  }
+
+  /**
+   * true if the fetch request is in progress
+   */
+  get isLoading() {
+    return !this.isFinished;
+  }
+
+  /**
+   * true if the request throws an exception
+   * or if the request.status is >= 400
+   */
+  get isError() {
+    let httpError = this.status && this.status >= 400;
+    let promiseThrew = this.isRejected;
+
+    return httpError || promiseThrew;
+  }
+}
+
+/**
+ * Native [fetch](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API)
+ * but with built-in [AbortController](https://developer.mozilla.org/en-US/docs/Web/API/AbortController)
+ *
+ * example with composition (maybe you want to implement your own version
+ * that also wraps up authorization headers):
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { use, resource } from 'ember-resources';
+ * import { remoteData } from 'reactiveweb/remote-data';
+ *
+ * class Demo {
+ *   @tracked id = 1;
+ *
+ *   @use myData = resource((hooks) =>
+ *     remoteData(hooks, `https://...${this.id}`)
+ *   );
+ * }
+ * ```
+ *
+ * The same example, but without `@use`
+ *
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { resource } from 'ember-resources';
+ * import { remoteData } from 'reactiveweb/remote-data';
+ *
+ * class Demo {
+ *   @tracked id = 1;
+ *
+ *   myData = resource(this, (hooks) =>
+ *     remoteData(hooks, `https://...${this.id}`)
+ *   );
+ * }
+ * ```
+ *
+ */
+export function remoteData<T = unknown>(
+  { on }: ResourceAPI,
+  url: string,
+  options: FetchOptions = {}
+): State<T> {
+  let state = new State<T>();
+  let controller = new AbortController();
+
+  on.cleanup(() => controller.abort());
+
+  waitForPromise(
+    fetch(url, { signal: controller.signal, ...options })
+      .then((response) => {
+        state.status = response.status;
+
+        if (response.headers.get('Content-Type')?.includes('json')) {
+          return response.json();
+        }
+
+        return response.text();
+      })
+      .then((data) => {
+        state.isResolved = true;
+        state.value = data;
+      })
+      .catch((error) => {
+        state.isRejected = true;
+        state.error = error;
+      })
+  );
+
+  return state;
+}
+
+/**
+ * json-based remote data utility.
+ *
+ * this API mimics the API of `fetch`, and will give you a reactive
+ * [[State]] object, but won't be able to re-fetch when the url or options
+ * change
+ *
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { use } from 'ember-resources';
+ * import { RemoteData } from 'reactiveweb/remote-data';
+ *
+ * class Demo {
+ *   @use myData = RemoteData(`https://some.domain.io`);
+ *
+ *   @use withOptions = RemoteData(`https://some.domain.io`, {
+ *     headers: {
+ *       Authorization: 'Bearer <token>'
+ *     }
+ *   });
+ * }
+ * ```
+ *
+ * In strict mode with &lt;template&gt;
+ * ```jsx gjs
+ * import { RemoteData } from 'reactiveweb/remote-data';
+ *
+ * const options = (token) => ({
+ *   headers: {
+ *     Authorization: `Bearer ${token}`
+ *   }
+ * });
+ *
+ * <template>
+ *  {{#let (RemoteData "https://some.domain" (options "my-token")) as |state|}}
+ *    {{state.isLoading}}
+ *    {{state.value}}
+ *  {{/let}}
+ * </template>
+ * ```
+ *
+ */
+export function RemoteData<T = unknown>(url: string, options?: FetchOptions): State<T>;
+
+/**
+ * json-based remote data utility
+ *
+ *
+ * For a reactive URL (causing the underlying fetch to re-run when the URL changes),
+ * the url must be the return value from a function passed to
+ * `RemoteData`.
+ *
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { use } from 'ember-resources';
+ * import { RemoteData } from 'reactiveweb/remote-data';
+ *
+ * class Demo {
+ *   @tracked url = 'https:// .... '
+ *
+ *   @use myData = RemoteData(() => this.url);
+ * }
+ * ```
+ */
+export function RemoteData<T = unknown>(url: () => string): State<T>;
+
+/**
+ * json-based remote data utility
+ *
+ * When you want the remote data request to re-fetch
+ * when either the URL or `FetchOptions` change, the `url`
+ * becomes a property on the object returned from the thunk.
+ *
+ * ```js
+ * import { tracked } from '@glimmer/tracking';
+ * import { use } from 'ember-resources';
+ * import { RemoteData } from 'reactiveweb/remote-data';
+ *
+ * class Demo {
+ *   @tracked id = 2;
+ *   @tracked postData = '';
+ *
+ *   @use myData = RemoteData(() => ({
+ *     url: `https://this.some.domain/${this.id}`,
+ *     method: 'POST',
+ *     body: this.postData
+ *   }));
+ * }
+ * ```
+ */
+export function RemoteData<T = unknown>(options: () => { url: string } & FetchOptions): State<T>;
+
+/**
+ * json-based remote data utility
+ */
+export function RemoteData<T = unknown>(
+  url: string | (() => string) | (() => { url: string } & FetchOptions),
+  opts?: FetchOptions
+) {
+  return resource((hooks) => {
+    let result = typeof url === 'string' ? url : url();
+    let targetUrl: string;
+    let options: FetchOptions = {};
+
+    if (typeof result === 'string') {
+      targetUrl = result;
+    } else {
+      let { url, ...opts } = result;
+
+      targetUrl = url;
+      options = opts;
+    }
+
+    if (opts) {
+      options = { ...options, ...opts };
+    }
+
+    return remoteData<T>(hooks, targetUrl, options);
+  });
+}
+
+resourceFactory(RemoteData);
+
+
+---
+
+/**
+ * Synchronize external state.
+ *
+ * This should be used sparingly, if at all.
+ * The purpose of this util is to provide a way to synchronize external state
+ * in an auto-tracked system.
+ * However, this can lead to infinite revalidation / re-rendering problems if tracked data is set within the function passed to `sync`.
+ *
+ * As a result, tracked data should not be set within `sync`.
+ * Example usage of when you may want to use `sync`
+ * ```js
+ * import { sync } from 'reactiveweb/sync';
+ * import { fn } from '@ember/helper';
+ *
+ * function setTitle(title) {
+ *   document.title = title;
+ * }
+ *
+ * <template>
+ *   {{sync (fn setTitle "My Blog")}}
+ * </template>
+ * ```
+ *
+ * `sync` does autotrack, so accessing tracked data within the function passed to sync
+ * will cause updates to be re-synced.
+ *
+ * ```js
+ * import { sync } from 'reactiveweb/sync';
+ * import { fn } from '@ember/helper';
+ *
+ * function setTitle(title) {
+ *   document.title = title;
+ * }
+ *
+ * class Demo extends Component {
+ *    <template>
+ *      {{sync (fn setTitle this.title)}}
+ *    </template>
+ *
+ *    @tracked title;
+ *
+ *    updateTitle = (newTitle) => this.title = newTitle;
+ * }
+ * ```
+ *
+ * If setting tracked data absolutely must happen, you may want to "detach" from autotracking.
+ * There are two ways to do this, depending on the timing needs of your UI.
+ * - `await Promise.resolve()` -- relies on happenstance of how autotracking works
+ * - `requestAnimationFrame()` -- more robust, but is delayed until the next available frame to do work in.
+ *
+ * In either case there are rare timing circumstances where when the synchronized code
+ * _happens_ to run, it could accidentally be a part of a tracking frame. It's highly unlikely,
+ * since auto-tracking is synchronous, but the probability is non-0.
+ *
+ * Example of detaching from auto-tracking:
+ * ```js
+ * import { sync } from 'reactiveweb/sync';
+ *
+ * class Demo extends Component {
+ *    <template>
+ *      {{sync setTitle}}
+ *    </template>
+ *
+ *    @tracked title;
+ *
+ *    updateTitle = (newTitle) => this.title = newTitle;
+ *
+ *    // note this is an "effect" or "side-effect" and highly discouraged
+ *    // in app and library code.
+ *    // These tend to become "observers", which are harder to debug and
+ *    // fall under the "spooky action at a distance" code smell.
+ *    setTitle = async () => {
+ *      await Promise.resolve();
+ *
+ *      // accessing before the await auto-tracks,
+ *      // because auto-tracking is synchronous
+ *      let title = this.title;
+ *
+ *      this.title = `${title}!!!!!!`;
+ *    }
+ * }
+ * ```
+ *
+ */
+export function sync(fn: () => void | Promise<void>): void {
+  fn();
+}
+
+
+---
+
+import { cell, resource } from 'ember-resources';
+
+/**
+ * A utility that creates a resource allowing us to throttle execution of a function.
+ * Especially useful for rate limiting execution of handlers on events like resize and scroll.
+ *
+ * ```js
+ *  import Component from '@glimmer/component';
+ *  import { tracked } from '@glimmer/tracking';
+ *  import { use } from 'ember-resources';
+ *  import { throttle } from 'reactiveweb/throttle';
+ *
+ *  class Demo extends Component {
+ *    @tracked _userInput = 'initial';
+ *
+ *    // immediately returns 'initial', and all updates will be throttled
+ *    // to update only after 100ms since the last value was detected.
+ *    @use userInput  = throttle(100, () => this._userInput);
+ * ```
+ *
+ * @param delay A zero-or-greater delay in milliseconds. For event callbacks, values around 100 or 250 (or even higher) are most useful.
+ * @param callback A function to be executed after delay milliseconds.
+ */
+export function throttle<Value = unknown>(delay: number, callback: () => Value) {
+  const state = cell<Value | undefined>();
+  let last: unknown;
+
+  return resource(({ on }) => {
+    let timer: number;
+
+    on.cleanup(() => clearTimeout(timer));
+
+    timer = setTimeout(() => (state.current = callback()), delay);
+    last = last ?? callback();
+
+    return (state.current ?? last) as Value;
+  });
+}
+
+
+---
+
+import type { ArgsWrapper, Thunk } from 'ember-resources';
+
+export const DEFAULT_THUNK = () => [];
+
+export function normalizeThunk(thunk?: Thunk): ArgsWrapper {
+  if (!thunk) {
+    return { named: {}, positional: [] };
+  }
+
+  let args = thunk();
+
+  if (Array.isArray(args)) {
+    return { named: {}, positional: args };
+  }
+
+  if (!args) {
+    return { named: {}, positional: [] };
+  }
+
+  /**
+   * Hopefully people aren't using args named "named"
+   */
+  if ('positional' in args || 'named' in args) {
+    return args;
+  }
+
+  return { named: args as Record<string, unknown>, positional: [] };
+}
+
+
+---
+
+import { cell, resource, resourceFactory } from 'ember-resources';
+
+/**
+ * Reactively wait for a time.
+ * uses setTimeout and cleans up if the caller is cleaned up.
+ *
+ * Usage in a template
+ * ```hbs
+ * {{#let (WaitUntil 500) as |delayFinished|}}
+ *    {{#if delayFinished}}
+ *
+ *      text displayed after 500ms
+ *
+ *    {{/if}}
+ * {{/let}}
+ * ```
+ */
+export const WaitUntil = resourceFactory((maybeDelayMs?: number | (() => number | undefined)) => {
+  return resource(({ on }) => {
+    const delayMs = typeof maybeDelayMs === 'function' ? maybeDelayMs() : maybeDelayMs;
+
+    // If we don't have a delay, we can start with
+    // immediately saying "we're done waiting"
+    const initialValue = delayMs ? false : true;
+    const delayFinished = cell(initialValue);
+
+    if (delayMs) {
+      const timer = setTimeout(() => (delayFinished.current = true), delayMs);
+
+      on.cleanup(() => clearTimeout(timer));
+    }
+
+    // Collapse the state that Cell provides to just a boolean
+    return () => delayFinished.current;
+  });
+});
+
+
+---
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+export interface Stage1DecoratorDescriptor {
+  initializer: () => unknown;
+}
+
+export type Stage1Decorator = (
+  prototype: object,
+  key: string | symbol,
+  descriptor?: Stage1DecoratorDescriptor
+) => any;
+
+export interface Class<Instance> {
+  new (...args: unknown[]): Instance;
+}
+
+// --- Type utilities for component signatures --- //
+// Type-only "symbol" to use with `EmptyObject` below, so that it is *not*
+// equivalent to an empty interface.
+declare const Empty: unique symbol;
+
+/**
+ * This provides us a way to have a "fallback" which represents an empty object,
+ * without the downsides of how TS treats `{}`. Specifically: this will
+ * correctly leverage "excess property checking" so that, given a component
+ * which has no named args, if someone invokes it with any named args, they will
+ * get a type error.
+ *
+ * @internal This is exported so declaration emit works (if it were not emitted,
+ *   declarations which fall back to it would not work). It is *not* intended for
+ *   public usage, and the specific mechanics it uses may change at any time.
+ *   The location of this export *is* part of the public API, because moving it
+ *   will break existing declarations, but is not legal for end users to import
+ *   themselves, so ***DO NOT RELY ON IT***.
+ */
+export type EmptyObject = { [Empty]?: true };
+
+export type GetOrElse<Obj, K, Fallback> = K extends keyof Obj ? Obj[K] : Fallback;
+
+export type ArgsFor<S> =
+  // Signature['Args']
+  S extends { Named?: object; Positional?: unknown[] }
+    ? {
+        Named: GetOrElse<S, 'Named', EmptyObject>;
+        Positional: GetOrElse<S, 'Positional', []>;
+      }
+    : S extends { named?: object; positional?: unknown[] }
+      ? {
+          Named: GetOrElse<S, 'named', EmptyObject>;
+          Positional: GetOrElse<S, 'positional', []>;
+        }
+      : { Named: EmptyObject; Positional: [] };
+
+export type ElementFor<S> = 'Element' extends keyof S
+  ? S['Element'] extends Element
+    ? S['Element']
+    : Element
+  : Element;
+
+/**
+ * Converts a variety of types to the expanded arguments type
+ * that aligns with the 'Args' portion of the 'Signature' types
+ * from ember's helpers, modifiers, components, etc
+ */
+export type ExpandArgs<T> = T extends any[]
+  ? ArgsFor<{ Positional: T }>
+  : T extends any
+    ? ArgsFor<T>
+    : never;
+
+export type Positional<T> = ExpandArgs<T>['Positional'];
+export type Named<T> = ExpandArgs<T>['Named'];
+
+
+---
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { getValue } from '@glimmer/tracking/primitives/cache';
+import { assert } from '@ember/debug';
+import { associateDestroyableChild } from '@ember/destroyable';
+import { invokeHelper } from '@ember/helper';
+import {
+  dependencySatisfies,
+  importSync,
+  isDevelopingApp,
+  isTesting,
+  macroCondition,
+} from '@embroider/macros';
+
+import type Owner from '@ember/owner';
+import type { Stage1DecoratorDescriptor } from '#types';
+
+let getOwner: (context: unknown) => Owner | undefined;
+
+if (macroCondition(dependencySatisfies('ember-source', '>=4.12.0'))) {
+  // Using 'any' here because importSync can't lookup types correctly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getOwner = (importSync('@ember/owner') as any).getOwner;
+} else {
+  // Using 'any' here because importSync can't lookup types correctly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getOwner = (importSync('@ember/application') as any).getOwner;
+}
+
+/**
+ * In order for the same cache to be used for all references
+ * in an app, this variable needs to be in module scope.
+ *
+ * When the owner is destroyed, the cache is cleared
+ * (because the WeakMap will see that nothing is referencing the key (owner) anymore)
+ *
+ * @internal
+ */
+export const __secret_service_cache__ = new WeakMap<Owner, Map<object, any>>();
+
+/**
+ * For testing purposes, this allows us to replace a service with a "mock".
+ */
+const REPLACEMENTS = new WeakMap<Owner, Map<object, object>>();
+
+/**
+ * <div class="callout note">
+ *
+ * This is not a core part of ember-resources, but demonstrates how services *are* an extension of resources.  This utility should be considered a prototype, but this utility is still under the broader library's SemVer policy.
+ *
+ * A consuming app will not pay for the bytes of this utility unless imported.
+ *
+ * </div>
+ *
+ * An alternative to Ember's built in `@service` decorator.
+ *
+ * This decorator takes a resource and ties the resource's lifeime to the app / owner.
+ *
+ * The reason a resource is required, as opposed to allowing "any class", is that a
+ * resource already has implemented the concept of "teardown" or "cleanup",
+ * and native classes do not have this concept.
+ *
+ * Example:
+ *
+ * ```js
+ * import Component from '@glimmer/component';
+ * import { resource } from 'ember-resources';
+ * import { service } from 'reactiveweb/resource/service';
+ *
+ * class PlanetsAPI { ... }
+ *
+ * const Planets = resource(({ on, owner }) => {
+ *   let api = new PlanetsAPI(owner); // for further injections
+ *
+ *   // on cleanup, we want to cancel any pending requests
+ *   on.cleanup(() => api.abortAll());
+ *
+ *   return api;
+ * });
+ *
+ * class Demo extends Component {
+ *   @service(Planets) planets;
+ * }
+ * ```
+ *
+ * For Stage 1 decorators and typescript, you'll need to manually declare the type:
+ * ```ts
+ * class Demo extends Component {
+ *   @service(Planets) declare planets: Planets;
+ * }
+ * ```
+ */
+export function service(resource: unknown) {
+  /**
+   * In order for resources to be instantiated this way, we need to copy a little bit of code from
+   * `@use`, as we still need to rely on `invokeHelper`.
+   *
+   * The main difference being that instead of using `this` for the parent to `invokeHelper`,
+   * we use the owner.
+   *
+   * BIG NOTE RELATED TO TYPE SAFETY:
+   *  - the `resource` argument is typed as `unknown` because the user-land types
+   *    are lies so that DX is useful. The actual internal representation of a resource is an object
+   *    with some properties with some hints for type narrowing
+   */
+
+  // Deliberately separate comment so the above dev-comment doesn't make its way to
+  // consumers
+  // PropertyDecorator
+  return function legacyServiceDecorator(
+    _prototype: object,
+    key: string,
+    descriptor?: Stage1DecoratorDescriptor
+  ) {
+    if (!descriptor) return;
+
+    assert(`@service(...) can only be used with string-keys`, typeof key === 'string');
+
+    assert(
+      `@service(...) may not be used with an initializer. For example, ` +
+        `\`@service(MyService) property;\``,
+      !descriptor.initializer
+    );
+
+    assert(
+      `Expected passed resource to be a valid resource definition.`,
+      typeof resource === 'function' || (typeof resource === 'object' && resource !== null)
+    );
+
+    return {
+      get(this: object) {
+        let owner = getOwner(this);
+
+        assert(
+          `owner was not found on instance of ${this.constructor.name}. ` +
+            `Has it been linked up correctly with setOwner?` +
+            `If this error has occured in a framework-controlled class, something has gone wrong.`,
+          owner
+        );
+
+        assert(`Resource definition is invalid`, isResourceType(resource));
+
+        if (macroCondition(isTesting() || isDevelopingApp())) {
+          let cachedReplacements = ensureCaches(owner, REPLACEMENTS);
+
+          let replacement = cachedReplacements.get(resource);
+
+          if (replacement) {
+            resource = replacement;
+
+            assert(`Replacement Resource definition is invalid`, isResourceType(resource));
+          }
+        }
+
+        let caches = ensureCaches(owner);
+        let cache = caches.get(resource);
+
+        if (!cache) {
+          if ('type' in resource) {
+            assert(
+              `When using resources with @service(...), do not call .from() on class-based resources. ` +
+                `Resources used as services may not take arguments.`,
+              resource.type === 'function-based'
+            );
+
+            cache = invokeHelper(owner, resource);
+            caches.set(resource, cache);
+            associateDestroyableChild(owner, cache);
+          } else if ('from' in resource) {
+            /**
+             * We do a lot of lying internally to make TypeScript nice for consumers.
+             * But it does mean that we have to cast in our own code.
+             */
+            let { definition } = (resource as any).from(() => []) as unknown as any;
+
+            cache = invokeHelper(owner, definition);
+            caches.set(resource, cache);
+            associateDestroyableChild(owner, cache);
+          }
+        }
+
+        return getValue(cache);
+      },
+    } as unknown as void /* thanks, TS. */;
+  };
+}
+
+function ensureCaches(owner: Owner, cache = __secret_service_cache__) {
+  let caches = cache.get(owner);
+
+  if (!caches) {
+    caches = new Map();
+    cache.set(owner, caches);
+  }
+
+  return caches;
+}
+
+function isResourceType(resource: unknown): resource is any {
+  // The internal representation of the passed resource will not match its type.
+  // A resource is always either a class definition, or the custom internal object.
+  // (See the helper managers for details)
+  return typeof resource === 'function' || (typeof resource === 'object' && resource !== null);
+}
+
+interface RegisterOptions {
+  /**
+   * The original service to replace.
+   */
+  original: unknown;
+  /**
+   * The replacement service to use.
+   */
+  replacement: unknown;
+}
+
+/**
+ *
+ */
+export function serviceOverride(owner: Owner, { original, replacement }: RegisterOptions) {
+  if (macroCondition(!isTesting() && !isDevelopingApp())) {
+    throw new Error(
+      '@service is experimental and `serviceOverride` is not available in production builds.'
+    );
+  }
+
+  let caches = ensureCaches(owner);
+
+  assert(`Original Resource definition is invalid`, isResourceType(original));
+  assert(`Replacement Resource definition is invalid`, isResourceType(replacement));
+
+  assert(`Cannot re-register service after it has been accessed.`, !caches.has(original));
+
+  let replacementCache = ensureCaches(owner, REPLACEMENTS);
+
+  replacementCache.set(original, replacement);
+}
+
+
+---
+
+import { assert } from '@ember/debug';
+import { setModifierManager } from '@ember/modifier';
+
+import { resourceFactory } from 'ember-resources';
+
+import FunctionBasedModifierManager from './manager.ts';
+
+import type { ModifierLike } from '@glint/template';
+import type { ArgsFor, ElementFor, EmptyObject } from '#types';
+import type { resource } from 'ember-resources';
+
+// Provide a singleton manager.
+const MANAGER = new FunctionBasedModifierManager();
+
+type PositionalArgs<S> = S extends { Args?: object } ? ArgsFor<S['Args']>['Positional'] : [];
+type NamedArgs<S> = S extends { Args?: object }
+  ? ArgsFor<S['Args']>['Named'] extends object
+    ? ArgsFor<S['Args']>['Named']
+    : EmptyObject
+  : EmptyObject;
+
+type ArgsForFn<S> = S extends { Args?: object }
+  ? ArgsFor<S['Args']>['Named'] extends EmptyObject
+    ? [...PositionalArgs<S>]
+    : [...PositionalArgs<S>, NamedArgs<S>]
+  : [];
+
+/**
+ * A resource-based API for building modifiers.
+ *
+ * You can attach this to an element, and use a `resource` to manage
+ * the state, add event listeners, remove event listeners on cleanup, etc.
+ *
+ * Using resources for modifiers provides a clear and concise API with
+ * easy to read concerns.
+ *
+ *
+ * The signature for the modifier here is _different_ from `ember-modifier`, where positional args and named args are grouped together into an array and object respectively.
+
+ * This signature for ember-resource's `modifier` follows the [plain function invocation](https://blog.emberjs.com/plain-old-functions-as-helpers/) signature.
+ *
+ * ```js
+ * import { resource } from 'ember-resources';
+ * import { modifier } from 'reactiveweb/resource/modifier';
+ *
+ * const wiggle = modifier((element, arg1, arg2, namedArgs) => {
+ *     return resource(({ on }) => {
+ *         let animation = element.animate([
+ *             { transform: `translateX(${arg1}px)` },
+ *             { transform: `translateX(-${arg2}px)` },
+ *         ], {
+ *             duration: 100,
+ *             iterations: Infinity,
+ *         });
+ *
+ *         on.cleanup(() => animation.cancel());
+ *     });
+ * });
+ *
+ * <template>
+ *     <div {{wiggle 2 5 named="hello"}}>hello</div>
+ * </template>
+ * ```
+ *
+ */
+export function modifier<El extends Element, Args extends unknown[] = unknown[]>(
+  fn: (element: El, ...args: Args) => void
+): ModifierLike<{
+  Element: El;
+  Args: {
+    Named: EmptyObject;
+    Positional: Args;
+  };
+}>;
+
+/**
+ * A resource-based API for building modifiers.
+ *
+ * You can attach this to an element, and use a `resource` to manage
+ * the state, add event listeners, remove event listeners on cleanup, etc.
+ *
+ * Using resources for modifiers provides a clear and concise API with
+ * easy to read concerns.
+ *
+ *
+ * The signature for the modifier here is _different_ from `ember-modifier`, where positional args and named args are grouped together into an array and object respectively.
+
+ * This signature for ember-resource's `modifier` follows the [plain function invocation](https://blog.emberjs.com/plain-old-functions-as-helpers/) signature.
+ *
+ * ```js
+ * import { resource } from 'ember-resources';
+ * import { modifier } from 'reactiveweb/resource/modifier';
+ *
+ * const wiggle = modifier((element, arg1, arg2, namedArgs) => {
+ *     return resource(({ on }) => {
+ *         let animation = element.animate([
+ *             { transform: `translateX(${arg1}px)` },
+ *             { transform: `translateX(-${arg2}px)` },
+ *         ], {
+ *             duration: 100,
+ *             iterations: Infinity,
+ *         });
+ *
+ *         on.cleanup(() => animation.cancel());
+ *     });
+ * });
+ *
+ * <template>
+ *     <div {{wiggle 2 5 named="hello"}}>hello</div>
+ * </template>
+ * ```
+ *
+ */
+export function modifier<S extends { Element?: Element }>(
+  fn: (element: ElementFor<S>, ...args: ArgsForFn<S>) => ReturnType<typeof resource>
+): ModifierLike<S>;
+/**
+ * A resource-based API for building modifiers.
+ *
+ * You can attach this to an element, and use a `resource` to manage
+ * the state, add event listeners, remove event listeners on cleanup, etc.
+ *
+ * Using resources for modifiers provides a clear and concise API with
+ * easy to read concerns.
+ *
+ *
+ * The signature for the modifier here is _different_ from `ember-modifier`, where positional args and named args are grouped together into an array and object respectively.
+
+ * This signature for ember-resource's `modifier` follows the [plain function invocation](https://blog.emberjs.com/plain-old-functions-as-helpers/) signature.
+ *
+ * ```js
+ * import { resource } from 'ember-resources';
+ * import { modifier } from 'reactiveweb/resource/modifier';
+ *
+ * const wiggle = modifier((element, arg1, arg2, namedArgs) => {
+ *     return resource(({ on }) => {
+ *         let animation = element.animate([
+ *             { transform: `translateX(${arg1}px)` },
+ *             { transform: `translateX(-${arg2}px)` },
+ *         ], {
+ *             duration: 100,
+ *             iterations: Infinity,
+ *         });
+ *
+ *         on.cleanup(() => animation.cancel());
+ *     });
+ * });
+ *
+ * <template>
+ *     <div {{wiggle 2 5 named="hello"}}>hello</div>
+ * </template>
+ * ```
+ *
+ */
+export function modifier<S extends { Args?: object }>(
+  fn: (element: ElementFor<S>, ...args: ArgsForFn<S>) => ReturnType<typeof resource>
+): ModifierLike<S>;
+/**
+ * A resource-based API for building modifiers.
+ *
+ * You can attach this to an element, and use a `resource` to manage
+ * the state, add event listeners, remove event listeners on cleanup, etc.
+ *
+ * Using resources for modifiers provides a clear and concise API with
+ * easy to read concerns.
+ *
+ *
+ * The signature for the modifier here is _different_ from `ember-modifier`, where positional args and named args are grouped together into an array and object respectively.
+
+ * This signature for ember-resource's `modifier` follows the [plain function invocation](https://blog.emberjs.com/plain-old-functions-as-helpers/) signature.
+ *
+ * ```js
+ * import { resource } from 'ember-resources';
+ * import { modifier } from 'reactiveweb/resource/modifier';
+ *
+ * const wiggle = modifier((element, arg1, arg2, namedArgs) => {
+ *     return resource(({ on }) => {
+ *         let animation = element.animate([
+ *             { transform: `translateX(${arg1}px)` },
+ *             { transform: `translateX(-${arg2}px)` },
+ *         ], {
+ *             duration: 100,
+ *             iterations: Infinity,
+ *         });
+ *
+ *         on.cleanup(() => animation.cancel());
+ *     });
+ * });
+ *
+ * <template>
+ *     <div {{wiggle 2 5 named="hello"}}>hello</div>
+ * </template>
+ * ```
+ *
+ */
+export function modifier<S extends { Element?: Element; Args?: object }>(
+  fn: (element: ElementFor<S>, ...args: ArgsForFn<S>) => ReturnType<typeof resource>
+): ModifierLike<S>;
+
+export function modifier(fn: (element: Element, ...args: unknown[]) => void): ModifierLike<{
+  Element: Element;
+  Args: {
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    Named: {};
+    Positional: [];
+  };
+}> {
+  assert(`modifier() must be invoked with a function`, typeof fn === 'function');
+  setModifierManager(() => MANAGER, fn);
+  resourceFactory(fn);
+
+  return fn as unknown as ModifierLike<{
+    Element: Element;
+    Args: {
+      // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+      Named: {};
+      Positional: [];
+    };
+  }>;
+}
+
+/**
+ * @internal
+ */
+export type FunctionBasedModifierDefinition<S> = (
+  element: ElementFor<S>,
+  positional: PositionalArgs<S>,
+  named: NamedArgs<S>
+) => void;
+
+
+---
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { getValue } from '@glimmer/tracking/primitives/cache';
+import { destroy } from '@ember/destroyable';
+import { invokeHelper } from '@ember/helper';
+import { capabilities } from '@ember/modifier';
+
+interface ArgsWrapper {
+  positional?: readonly unknown[];
+  named?: Record<string, any>;
+}
+
+import type { FunctionBasedModifierDefinition } from './index.ts';
+import type { ElementFor } from '#types';
+
+interface State<S> {
+  instance: FunctionBasedModifierDefinition<S>;
+  helper: ReturnType<typeof invokeHelper> | null;
+}
+
+interface CreatedState<S> extends State<S> {
+  element: null;
+}
+
+interface InstalledState<S> extends State<S> {
+  element: ElementFor<S>;
+}
+
+// Wraps the unsafe (b/c it mutates, rather than creating new state) code that
+// TS does not yet understand.
+function installElement<S>(state: CreatedState<S>, element: ElementFor<S>): InstalledState<S> {
+  // SAFETY: this cast represents how we are actually handling the state machine
+  // transition: from this point forward in the lifecycle of the modifier, it
+  // always behaves as `InstalledState<S>`. It is safe because, and *only*
+  // because, we immediately initialize `element`. (We cannot create a new state
+  // from the old one because the modifier manager API expects mutation of a
+  // single state bucket rather than updating it at hook calls.)
+  const installedState = state as State<S> as InstalledState<S>;
+
+  installedState.element = element;
+
+  return installedState;
+}
+
+function arrangeArgs(element: Element, args: any) {
+  const { positional, named } = args;
+
+  let flattenedArgs = [element, ...positional];
+
+  if (Object.keys(named).length > 0) {
+    flattenedArgs.push(named);
+  }
+
+  return flattenedArgs;
+}
+
+export default class FunctionBasedModifierManager<S> {
+  capabilities = capabilities('3.22');
+
+  createModifier(instance: FunctionBasedModifierDefinition<S>): CreatedState<S> {
+    return { element: null, instance, helper: null };
+  }
+
+  installModifier(createdState: CreatedState<S>, element: ElementFor<S>, args: ArgsWrapper): void {
+    const state = installElement(createdState, element);
+
+    this.updateModifier(state, args);
+  }
+
+  updateModifier(state: InstalledState<S>, args: ArgsWrapper): void {
+    if (state.helper) {
+      destroy(state.helper);
+    }
+
+    state.helper = invokeHelper(this, state.instance, () => {
+      let foo = arrangeArgs(state.element, args);
+
+      return { positional: foo };
+    });
+
+    getValue(state.helper);
+  }
+
+  destroyModifier(state: InstalledState<S>): void {
+    if (state.helper) {
+      destroy(state.helper);
+    }
+  }
+}
+
+
+---
+
