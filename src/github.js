@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { globbyStream } from 'globby';
 import { $ } from 'execa';
 import { readFile, writeFile } from 'node:fs/promises';
