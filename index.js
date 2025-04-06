@@ -22,12 +22,12 @@ let [, , ...args] = process.argv;
 let source = args[0];
 let todo = [];
 
-assert(
-  Object.keys(sources).includes(source),
-  `invalid source passed to script. Received: \`${source}\`. Allowed: ${Object.keys(sources).join(', ')}`,
-);
-
 if (source) {
+  assert(
+    Object.keys(sources).includes(source),
+    `invalid source passed to script. Received: \`${source}\`. Allowed: ${Object.keys(sources).join(', ')}`,
+  );
+
   console.log(`Using source: ${source}`);
   todo.push(sources[source]);
 } else {
