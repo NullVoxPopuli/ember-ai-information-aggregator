@@ -22,7 +22,7 @@ jobs:
           DEV_TO_KEY: ${{ secrets.DEV_TO_KEY }}
       - run: |
           git remote set-url origin https://git:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-          pnpm gh-pages -d dist -u "github-actions[bot] <support+actions@github.com>"
+          pnpm gh-pages -d dist -u "github-actions-bot <support+actions@github.com>"
         env: 
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
