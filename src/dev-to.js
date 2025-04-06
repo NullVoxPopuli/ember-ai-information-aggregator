@@ -73,9 +73,12 @@ export default async function getAll() {
     await new Promise((resolve) => setTimeout(resolve, 500));
     let data = await get(`/articles/${article.path}/`);
 
-    text += '\n';
+    text += '\n\n';
     text += '-----------------------------------------------------------';
-    text += '\n';
+    text += '\n\n';
+    text += `username: ${data.user.username}\n`;
+    text += `github_username: ${data.user.github_username}\n`;
+    text += `twitter_username: ${data.user.twitter_username}\n`;
     text += data.body_markdown;
   }
 
