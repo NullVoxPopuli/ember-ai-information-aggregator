@@ -39,6 +39,7 @@ const sources = [
   },
   {
     name: 'api-docs',
+    ext: '.json.md',
     group: [
       {
         name: 'ember-api-docs',
