@@ -1,4 +1,8 @@
+import path, { join } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+
 import { globby } from 'globby';
+
 let outputFile = path.join('dist', 'llms-full.txt');
 
 export async function createLLMsTxt() {
