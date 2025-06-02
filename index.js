@@ -11,6 +11,7 @@ import assert from 'node:assert';
 
 import { default as github } from './src/github.js';
 import { default as devto } from './src/dev-to.js';
+import { createLLMsTxt } from './src/llm.js';
 
 const sources = {
   github,
@@ -39,3 +40,5 @@ assert(todo.length > 0, `There are no active sources`);
 let results = await Promise.allSettled(todo.map((fn) => fn()));
 
 console.log(inspect(results, false, null));
+
+await createLLMsTxt();
