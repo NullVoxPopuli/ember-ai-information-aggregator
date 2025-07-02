@@ -38,6 +38,18 @@ const sources = [
     folder: 'reactiveweb/src',
   },
   {
+    name: 'low-level-code',
+    ext: '.js.md',
+    group: [
+      {
+        name: 'babel-plugin-ember-template-compilation',
+        git: 'https://github.com/emberjs/babel-plugin-ember-template-compilation.git',
+        folder: 'src',
+        pattern: '**/*.ts',
+      },
+    ],
+  },
+  {
     name: 'api-docs',
     ext: '.json.md',
     group: [
