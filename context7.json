@@ -5,6 +5,6 @@
   "folders": [],
   "branch": "gh-pages",
   "excludeFolders": [],
-  "excludeFiles": [],
+  "excludeFiles": ["index.html", "llms-full.txt"],
   "rules": []
 }
