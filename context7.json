@@ -1,0 +1,10 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Ember Community Information",
+  "description": "Docs, Guides, and community blog posts from the ember community",
+  "folders": [],
+  "branch": "gh-pages",
+  "excludeFolders": [],
+  "excludeFiles": [],
+  "rules": []
+}
