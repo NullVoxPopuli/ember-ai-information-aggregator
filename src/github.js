@@ -56,13 +56,13 @@ const sources = [
       {
         name: 'ember-api-docs',
         git: 'https://github.com/ember-learn/ember-api-docs-data.git',
-        folder: 'json-docs/ember/6.2.0/',
+        folder: 'json-docs/ember/6.8.0/',
         pattern: '**/*.json',
       },
       {
         name: 'ember-data-api-docs',
         git: 'https://github.com/ember-learn/ember-api-docs-data.git',
-        folder: 'json-docs/ember/6.2.0/',
+        folder: 'json-docs/ember/6.8.0/',
         pattern: '**/*.json',
       },
     ],
