@@ -14,6 +14,58 @@ const DEFAULT_PATTERN = '**/*';
  */
 const sources = [
   {
+    name: 'default-external-library-docs',
+    group: [
+      {
+        name: 'ember-modifier',
+        git: 'git@github.com:ember-modifier/ember-modifier.git',
+        folder: '.',
+        pattern: 'README.md',        
+      },
+      {
+        name: 'ember-page-title',
+        git: 'git@github.com:ember-cli/ember-page-title.git',
+        folder: 'docs/app/templates',
+        pattern: 'docs.hbs',
+      },
+      {
+        name: 'ember-cli-deprecation-workflow',
+        git: 'git@github.com:ember-cli/ember-cli-deprecation-workflow.git',
+        folder: '.',
+        pattern: 'README.md',
+      },
+    ],
+  },
+  {
+    name: 'default-external-testing-library-docs',
+    group: [
+      {
+        name: 'ember-test-waiters',
+        git: 'git@github.com:emberjs/ember-test-waiters.git',
+        folder: '.',
+        pattern: 'README.md',        
+      },
+      {
+        name: 'ember-test-helpers',
+        git: 'git@github.com:emberjs/ember-test-helpers.git',
+        folder: '.',
+        pattern: 'API.md',                
+      },      
+      {
+        name: 'ember-qunit',
+        git: 'git@github.com:emberjs/ember-qunit.git',
+        folder: '.',
+        pattern: 'README.md',                 
+      },      
+      {
+        name: 'qunit-dom',
+        git: 'git@github.com:mainmatter/qunit-dom.git',
+        folder: '.',
+        pattern: 'API.md',
+      },
+    ],
+  },
+  {
     name: 'glint',
     git: 'https://github.com/typed-ember/glint.git',
     folder: 'docs',
