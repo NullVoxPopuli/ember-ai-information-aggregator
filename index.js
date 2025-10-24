@@ -11,11 +11,13 @@ import assert from 'node:assert';
 
 import { default as github } from './src/github.js';
 import { default as devto } from './src/dev-to.js';
+import { default as otherLLMsTexts } from './src/other-llms-texts.js';
 import { createLLMsTxt } from './src/llm.js';
 
 const sources = {
   github,
   devto,
+  otherLLMsTexts,
 };
 
 let [, , ...args] = process.argv;
