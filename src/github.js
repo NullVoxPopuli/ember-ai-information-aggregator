@@ -15,6 +15,7 @@ const DEFAULT_PATTERN = '**/*';
 const sources = [
   {
     name: 'default-external-library-docs',
+    ext: 'md',
     group: [
       {
         name: 'ember-modifier',
@@ -38,6 +39,7 @@ const sources = [
   },
   {
     name: 'default-external-testing-library-docs',
+    ext: 'md',
     group: [
       {
         name: 'ember-test-waiters',
@@ -91,7 +93,7 @@ const sources = [
   },
   {
     name: 'low-level-code',
-    ext: '.js.md',
+    ext: 'js.md',
     group: [
       {
         name: 'babel-plugin-ember-template-compilation',
@@ -103,7 +105,7 @@ const sources = [
   },
   {
     name: 'api-docs',
-    ext: '.json.md',
+    ext: 'json.md',
     group: [
       {
         name: 'ember-api-docs',
